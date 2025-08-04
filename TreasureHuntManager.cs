@@ -56,6 +56,9 @@ public class TreasureHuntManager : MonoBehaviour
 
     [Header("Treasure Hunt Data")]
     public TreasureLocation[] treasureLocations;
+    
+    [Header("Mobile Debug")]
+    public TMP_Text mobileDebugText;
 
     // Team assignment variables
     private int teamNumber;
@@ -80,6 +83,7 @@ public class TreasureHuntManager : MonoBehaviour
         if (totalClues == 0)
         {
             Debug.LogError("No treasure locations defined! Please add clues to the array.");
+            if (mobileDebugText != null) mobileDebugText.text = "ERROR: No treasure locations defined!";
             return;
         }
 
@@ -90,11 +94,13 @@ public class TreasureHuntManager : MonoBehaviour
             if (cameraHelper == null)
             {
                 Debug.LogError("ARWorldPositioningCameraHelper not found on ARCameraManager!");
+                if (mobileDebugText != null) mobileDebugText.text = "ERROR: ARWorldPositioningCameraHelper not found!";
             }
         }
         else
         {
             Debug.LogError("ARCameraManager not assigned!");
+            if (mobileDebugText != null) mobileDebugText.text = "ERROR: ARCameraManager not assigned!";
         }
 
         // Initialize UI state
@@ -105,6 +111,7 @@ public class TreasureHuntManager : MonoBehaviour
         startHuntButton.onClick.AddListener(OnStartHunt);
 
         Debug.Log($"Treasure hunt initialized with {totalClues} clues");
+        if (mobileDebugText != null) mobileDebugText.text = $"Treasure hunt initialized with {totalClues} clues";
     }
 
     void Update()
@@ -143,7 +150,7 @@ public class TreasureHuntManager : MonoBehaviour
         else
         {
             Debug.LogWarning("Invalid team number entered");
-            // You could show an error message here
+            if (mobileDebugText != null) mobileDebugText.text = "WARNING: Invalid team number entered";
         }
     }
 
@@ -155,6 +162,7 @@ public class TreasureHuntManager : MonoBehaviour
         delayMinutes = wave * 5;
 
         Debug.Log($"Team {teamNumber}: Wave {wave}, Clue Index {clueIndex + 1}, Delay {delayMinutes} minutes");
+        if (mobileDebugText != null) mobileDebugText.text = $"Team {teamNumber}: Wave {wave}, Clue {clueIndex + 1}, Delay {delayMinutes}min";
     }
 
     private void StartTimer()
@@ -168,6 +176,7 @@ public class TreasureHuntManager : MonoBehaviour
         waitingMessage.text = "Waiting for your turn...";
 
         Debug.Log($"Timer started. Team will begin at: {startTime:HH:mm:ss}");
+        if (mobileDebugText != null) mobileDebugText.text = $"Timer started. Begin at: {startTime:HH:mm:ss}";
     }
 
     private void UpdateTimer()
@@ -203,6 +212,7 @@ public class TreasureHuntManager : MonoBehaviour
         ShowCluePanel();
 
         Debug.Log("Timer complete! Starting treasure hunt.");
+        if (mobileDebugText != null) mobileDebugText.text = "Timer complete! Starting treasure hunt.";
     }
 
     private void ShowRegistrationPanel()
@@ -242,10 +252,12 @@ public class TreasureHuntManager : MonoBehaviour
         {
             clueDisplayText.text = treasureLocations[clueIndex].clueText;
             Debug.Log($"Displaying clue {clueIndex + 1}: {treasureLocations[clueIndex].clueText}");
+            if (mobileDebugText != null) mobileDebugText.text = $"Displaying clue {clueIndex + 1}: {treasureLocations[clueIndex].clueText}";
         }
         else
         {
             Debug.LogError($"Invalid clue index: {clueIndex}");
+            if (mobileDebugText != null) mobileDebugText.text = $"ERROR: Invalid clue index: {clueIndex}";
             clueDisplayText.text = "Error: Clue not found";
         }
     }
@@ -253,6 +265,7 @@ public class TreasureHuntManager : MonoBehaviour
     public void OnStartHunt()
     {
         Debug.Log($"Team {teamNumber} started hunting for treasure at location: {GetCurrentTreasureLocation().latitude}, {GetCurrentTreasureLocation().longitude}");
+        if (mobileDebugText != null) mobileDebugText.text = $"Team {teamNumber} started hunting - GPS tracking enabled";
 
         // Disable the start hunt button
         startHuntButton.interactable = false;
@@ -267,10 +280,12 @@ public class TreasureHuntManager : MonoBehaviour
         {
             isGPSTrackingActive = true;
             Debug.Log("GPS tracking enabled. Looking for treasure location...");
+            if (mobileDebugText != null) mobileDebugText.text = "GPS tracking enabled. Looking for treasure location...";
         }
         else
         {
             Debug.LogError("Cannot enable GPS tracking - ARWorldPositioningCameraHelper not available");
+            if (mobileDebugText != null) mobileDebugText.text = "ERROR: Cannot enable GPS tracking - ARWorldPositioningCameraHelper not available";
         }
     }
 
@@ -296,6 +311,7 @@ public class TreasureHuntManager : MonoBehaviour
         else
         {
             Debug.Log($"Distance to treasure: {distance:F1}m");
+            if (mobileDebugText != null) mobileDebugText.text = $"Distance to treasure: {distance:F1}m";
         }
 
         // Check if within proximity threshold
@@ -320,6 +336,7 @@ public class TreasureHuntManager : MonoBehaviour
         isNearTreasure = true;
 
         Debug.Log("Arrived at treasure location! Switching to AR mode.");
+        if (mobileDebugText != null) mobileDebugText.text = "ARRIVED AT TREASURE! Switching to AR mode.";
 
         // Hide clue panel and show AR scan panel
         ShowARScanPanel();
@@ -330,6 +347,7 @@ public class TreasureHuntManager : MonoBehaviour
         isNearTreasure = false;
 
         Debug.Log("Left treasure area. Returning to clue mode.");
+        if (mobileDebugText != null) mobileDebugText.text = "Left treasure area. Returning to clue mode.";
 
         // Return to clue panel and hide AR scan panel
         ShowCluePanelFromAR();
@@ -377,6 +395,7 @@ public class TreasureHuntManager : MonoBehaviour
         }
 
         Debug.Log("AR scan mode activated. Look for the treasure marker!");
+        if (mobileDebugText != null) mobileDebugText.text = "AR SCAN MODE ACTIVATED! Look for the treasure marker!";
     }
 
     // Haversine formula to calculate distance between two GPS coordinates
