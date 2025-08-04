@@ -47,6 +47,7 @@ public class TreasureHuntManager : MonoBehaviour
     public ARCameraManager arCameraManager;
     public GameObject arScanPanel;
     public ClueARImageManager clueARImageManager;
+    public ARWorldPositioningManager wpsManager;
 
     [Header("GPS Settings")]
     public float proximityThreshold = 10f; // meters to trigger AR mode
@@ -267,8 +268,8 @@ public class TreasureHuntManager : MonoBehaviour
         Debug.Log($"Team {teamNumber} started hunting for treasure at location: {GetCurrentTreasureLocation().latitude}, {GetCurrentTreasureLocation().longitude}");
         if (mobileDebugText != null) mobileDebugText.text = $"Team {teamNumber} started hunting - GPS tracking enabled";
 
-        // Disable the start hunt button
-        startHuntButton.interactable = false;
+        // Hide the start hunt button completely
+        startHuntButton.gameObject.SetActive(false);
 
         // Enable GPS tracking
         EnableGPSTracking();
@@ -293,6 +294,17 @@ public class TreasureHuntManager : MonoBehaviour
     {
         TreasureLocation currentTreasure = GetCurrentTreasureLocation();
         if (currentTreasure == null) return;
+
+        // Temporarily disabled WPS check - calculate distance directly
+        // if (wpsManager == null || wpsManager.Status.ToString() != "Available")
+        // {
+        //     string statusMessage = GetWPSStatusMessage();
+        //     if (distanceDebugText != null)
+        //     {
+        //         distanceDebugText.text = statusMessage;
+        //     }
+        //     return;
+        // }
 
         // Get current device location from Lightship
         float deviceLatitude = (float)cameraHelper.Latitude;
@@ -328,6 +340,30 @@ public class TreasureHuntManager : MonoBehaviour
             {
                 OnLeftTreasureArea();
             }
+        }
+    }
+    
+    private string GetWPSStatusMessage()
+    {
+        if (wpsManager == null)
+        {
+            return "GPS system not configured...";
+        }
+        
+        string status = wpsManager.Status.ToString();
+        
+        switch (status)
+        {
+            case "Initializing":
+                return "Speaking to satellites...";
+            case "Localizing":
+                return "Data travelling across the atmosphere...";
+            case "Limited":
+                return "Weak GPS signal, getting better location...";
+            case "Failed":
+                return "GPS connection failed, retrying...";
+            default:
+                return $"Connecting to GPS... ({status})";
         }
     }
 
