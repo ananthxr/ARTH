@@ -255,14 +255,30 @@ public class ClueARImageManager : MonoBehaviour
                 trackedImage.transform.TransformPoint(clueData.spawnOffset),
                 trackedImage.transform.rotation * Quaternion.Euler(clueData.spawnRotation)
             );
-            
+
             if (debugMode)
             {
                 Debug.Log($"AR OBJECT SPAWNED! Clue {clueData.clueIndex} ({clueData.clueName})!");
                 if (mobileDebugText != null) mobileDebugText.text = $"SUCCESS! AR OBJECT SPAWNED! Clue {clueData.clueIndex} ({clueData.clueName})!";
             }
-            
+
+
+
             // Notify treasure hunt manager that treasure was found
+
+            // Enable collect button when treasure spawns
+            if (treasureHuntManager != null && treasureHuntManager.collectTreasureButton != null)
+            {
+                treasureHuntManager.collectTreasureButton.gameObject.SetActive(true);
+
+                // Assign listener dynamically
+                treasureHuntManager.collectTreasureButton.onClick.RemoveAllListeners();
+                treasureHuntManager.collectTreasureButton.onClick.AddListener(() =>
+                {
+                    treasureHuntManager.OnCollectTreasure(arObject);
+                });
+            }
+
             NotifyTreasureFound(clueData);
         }
         else if (trackedImage.trackingState == TrackingState.Limited || trackedImage.trackingState == TrackingState.None)

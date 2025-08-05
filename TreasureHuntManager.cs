@@ -57,9 +57,15 @@ public class TreasureHuntManager : MonoBehaviour
 
     [Header("Treasure Hunt Data")]
     public TreasureLocation[] treasureLocations;
-    
+
     [Header("Mobile Debug")]
     public TMP_Text mobileDebugText;
+
+    [Header("Treasure Collection UI")]
+    public Button collectTreasureButton;
+    public GameObject congratsPanel;
+    public TMP_Text congratsMessage;
+    public Button nextTreasureButton;
 
     // Team assignment variables
     private int teamNumber;
@@ -75,6 +81,13 @@ public class TreasureHuntManager : MonoBehaviour
     private bool isGPSTrackingActive = false;
     private bool isNearTreasure = false;
 
+
+    private int cluesFound = 0;
+
+    public int GetRemainingClues()
+    {
+        return totalClues - cluesFound;
+    }
     void Start()
     {
         // Initialize total clues count
@@ -110,6 +123,8 @@ public class TreasureHuntManager : MonoBehaviour
         // Setup button listeners
         registerButton.onClick.AddListener(OnRegisterTeam);
         startHuntButton.onClick.AddListener(OnStartHunt);
+        nextTreasureButton.onClick.AddListener(OnNextTreasure);
+
 
         Debug.Log($"Treasure hunt initialized with {totalClues} clues");
         if (mobileDebugText != null) mobileDebugText.text = $"Treasure hunt initialized with {totalClues} clues";
@@ -342,16 +357,16 @@ public class TreasureHuntManager : MonoBehaviour
             }
         }
     }
-    
+
     private string GetWPSStatusMessage()
     {
         if (wpsManager == null)
         {
             return "GPS system not configured...";
         }
-        
+
         string status = wpsManager.Status.ToString();
-        
+
         switch (status)
         {
             case "Initializing":
@@ -485,4 +500,55 @@ public class TreasureHuntManager : MonoBehaviour
         }
         return Vector2.zero;
     }
+
+
+    public void OnCollectTreasure(GameObject treasureObject)
+    {
+        StartCoroutine(ShrinkAndCollectTreasure(treasureObject));
+    }
+
+    private IEnumerator ShrinkAndCollectTreasure(GameObject treasureObject)
+    {
+        Vector3 startScale = treasureObject.transform.localScale;
+        float duration = 0.5f;
+        float time = 0;
+
+        while (time < duration)
+        {
+            time += Time.deltaTime;
+            float scaleFactor = Mathf.Lerp(1f, 0f, time / duration);
+            treasureObject.transform.localScale = startScale * scaleFactor;
+            yield return null;
+        }
+
+        treasureObject.SetActive(false);
+        treasureObject.transform.localScale = startScale; // Reset for reuse
+
+        cluesFound++;
+
+        // Show congrats panel
+        congratsPanel.SetActive(true);
+        congratsMessage.text = $"Congrats on finding the treasure!\n" +
+                               $"{GetRemainingClues()} clues remaining.";
+    }
+
+
+    public void OnNextTreasure()
+    {
+        congratsPanel.SetActive(false);
+
+        // Advance clue index in a circular order
+        clueIndex = (clueIndex + 1) % totalClues;
+
+        // Update clue panel
+        ShowCluePanel();
+
+        // Reactivate start hunt button for next treasure
+        startHuntButton.gameObject.SetActive(true);
+
+        // Hide CollectTreasure button until next AR object spawns
+        if (collectTreasureButton != null)
+            collectTreasureButton.gameObject.SetActive(false);
+    }
+
 }
