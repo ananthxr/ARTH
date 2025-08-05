@@ -41,6 +41,7 @@ public class ClueARImageManager : MonoBehaviour
     private Dictionary<string, ClueARData> imageNameToClueData;
     private Dictionary<int, ClueARData> clueIndexToData;
     private Dictionary<string, GameObject> arObjects; // Pre-instantiated objects
+    private HashSet<int> collectedClueIndices = new HashSet<int>(); // Track collected treasures
     private int currentActiveClueIndex = -1;
     
     void Start()
@@ -230,6 +231,18 @@ public class ClueARImageManager : MonoBehaviour
         ClueARData clueData = imageNameToClueData[imageName];
         GameObject arObject = arObjects[imageName];
         
+        // Check if this treasure has already been collected
+        if (collectedClueIndices.Contains(clueData.clueIndex))
+        {
+            if (debugMode)
+            {
+                Debug.Log($"Ignoring already collected treasure for clue {clueData.clueIndex} ({imageName})");
+                if (mobileDebugText != null) mobileDebugText.text = $"STEP 4 FAILED: Clue {clueData.clueIndex} already collected";
+            }
+            arObject.SetActive(false);
+            return;
+        }
+        
         // Check if this is the currently active clue
         if (clueData.clueIndex != currentActiveClueIndex)
         {
@@ -262,10 +275,6 @@ public class ClueARImageManager : MonoBehaviour
                 if (mobileDebugText != null) mobileDebugText.text = $"SUCCESS! AR OBJECT SPAWNED! Clue {clueData.clueIndex} ({clueData.clueName})!";
             }
 
-
-
-            // Notify treasure hunt manager that treasure was found
-
             // Enable collect button when treasure spawns
             if (treasureHuntManager != null && treasureHuntManager.collectTreasureButton != null)
             {
@@ -281,10 +290,17 @@ public class ClueARImageManager : MonoBehaviour
 
             NotifyTreasureFound(clueData);
         }
-        else if (trackedImage.trackingState == TrackingState.Limited || trackedImage.trackingState == TrackingState.None)
+        else
         {
-            // Hide the object if tracking is lost or limited
+            // Hide the object and button for any non-tracking state (Limited, None, etc.)
             arObject.SetActive(false);
+            
+            // Hide collect button when AR object is not visible
+            if (treasureHuntManager != null && treasureHuntManager.collectTreasureButton != null)
+            {
+                treasureHuntManager.collectTreasureButton.gameObject.SetActive(false);
+            }
+            
             if (debugMode && mobileDebugText != null) mobileDebugText.text = $"STEP 5 FAILED: Tracking state not good enough: {trackedImage.trackingState}";
         }
     }
@@ -297,6 +313,12 @@ public class ClueARImageManager : MonoBehaviour
             {
                 arObject.SetActive(false);
             }
+        }
+        
+        // Hide collect button when clearing all AR objects
+        if (treasureHuntManager != null && treasureHuntManager.collectTreasureButton != null)
+        {
+            treasureHuntManager.collectTreasureButton.gameObject.SetActive(false);
         }
     }
     
@@ -369,5 +391,17 @@ public class ClueARImageManager : MonoBehaviour
     public bool HasClueARData(int clueIndex)
     {
         return clueIndexToData.ContainsKey(clueIndex);
+    }
+    
+    // Method to mark a treasure as collected (called from TreasureHuntManager)
+    public void MarkTreasureAsCollected(int clueIndex)
+    {
+        collectedClueIndices.Add(clueIndex);
+        
+        if (debugMode)
+        {
+            Debug.Log($"Treasure for clue {clueIndex} marked as collected - will not respawn");
+            if (mobileDebugText != null) mobileDebugText.text = $"Treasure for clue {clueIndex} marked as collected - will not respawn";
+        }
     }
 }

@@ -119,20 +119,43 @@ Both TreasureHuntManager and ClueARImageManager now have mobile debug capabiliti
 - Second clue: `clueIndex = 1` (not 2)
 - This matches the team assignment calculation: `clueIndex = (teamNumber - 1) % totalClues`
 
-### Current Known Issues & Solutions
-1. **AR Object Spawning**: Works for clue index 0, debugging system in place for other indices
-2. **Start Hunt Button**: Now properly disappears when clicked using `gameObject.SetActive(false)`
+### Recent Fixes & Current System Behavior
+
+#### Treasure Collection System (FIXED - August 2025)
+**Issue**: Collected treasures would reappear when camera moved away and back to marker
+**Solution**: 
+- Added `collectedClueIndices` HashSet in ClueARImageManager to track collected treasures
+- Modified `UpdateTrackedImage()` to check if treasure already collected before spawning
+- Removed scale reset in `TreasureHuntManager.ShrinkAndCollectTreasure()` 
+- Added `MarkTreasureAsCollected()` method called after collection
+- **Result**: Once collected, treasures never respawn even if marker is detected again
+
+#### Collect Button Visibility (FIXED - August 2025)
+**Issue**: "Collect Treasure" button remained visible when camera moved away from marker
+**Solution**:
+- Modified tracking state logic from `else if` to `else` in `UpdateTrackedImage()`
+- Button now hides for ANY non-tracking state (Limited, None, etc.)
+- Added button hiding in `ClearAllARObjects()` method
+- **Result**: Button only visible when AR object is actively tracking and visible
+
+#### Current System State
+1. **AR Object Spawning**: Fully working with comprehensive debugging
+2. **Start Hunt Button**: Properly disappears when clicked using `gameObject.SetActive(false)`
 3. **GPS Status Messages**: WPS status checking temporarily disabled due to camera access issues
 4. **Performance**: Update() method in ClueARImageManager optimized to run every 10 frames
+5. **Treasure Collection**: Prevents duplicate collection and object respawning
+6. **Collect Button**: Dynamically shows/hides based on AR tracking state
 
 ### Debug Messages to Watch For
 When AR objects aren't spawning, look for these step-by-step messages:
 - `"STEP 1: Detected ImageName, State: Tracking"` - Image detected
 - `"STEP 2 PASSED: AR object exists for ImageName"` - AR object found
 - `"STEP 3 PASSED: Clue data exists for ImageName"` - Clue data found  
+- `"STEP 4 FAILED: Clue X already collected"` - Treasure already collected (NEW)
 - `"STEP 4 PASSED: Clue X matches active X"` - Index matches
 - `"STEP 5: Trying to spawn AR object..."` - About to spawn
 - `"SUCCESS! AR OBJECT SPAWNED!"` - Success
+- `"STEP 5 FAILED: Tracking state not good enough: [State]"` - Lost tracking, button hidden
 
 ### Setup Checklist for New Clues
 1. AR Reference Image Library contains the marker image
@@ -141,3 +164,56 @@ When AR objects aren't spawning, look for these step-by-step messages:
 4. `treasurePrefab` is assigned to a 3D object
 5. TreasureLocations array has corresponding entry at same index
 6. Mobile debug TextMeshPro assigned to both managers for testing
+
+## Technical Implementation Details
+
+### Treasure Collection Flow (Current Implementation)
+1. **AR Detection**: `ClueARImageManager.UpdateTrackedImage()` detects marker
+2. **Validation Chain**:
+   - Check if AR object exists for detected image
+   - Check if clue data exists for image
+   - **NEW**: Check if treasure already collected (`collectedClueIndices.Contains()`)
+   - Check if clue index matches currently active clue
+3. **Object Spawning**: If all checks pass, AR object appears and collect button shows
+4. **Collection Process**: 
+   - User clicks collect button → `TreasureHuntManager.OnCollectTreasure()`
+   - Object scales down to zero over 0.5 seconds
+   - Object deactivated but scale NOT reset (prevents reuse)
+   - `ClueARImageManager.MarkTreasureAsCollected()` called to prevent respawning
+   - Clue counter incremented, congrats panel shown
+
+### Button Visibility Logic (Current Implementation)
+- **Show Collect Button**: Only when `TrackingState.Tracking` and AR object is active
+- **Hide Collect Button**: 
+  - Any non-tracking state (Limited, None, etc.) 
+  - When `ClearAllARObjects()` is called
+  - When clue is already collected
+  - When switching between clues/panels
+
+### Key Methods & Their Purposes
+
+#### TreasureHuntManager.cs
+- `OnCollectTreasure(GameObject)`: Triggers shrink animation and marks as collected
+- `ShrinkAndCollectTreasure(GameObject)`: Coroutine that shrinks object and handles collection
+- `OnNextTreasure()`: Cycles to next clue, resets UI state
+- `GetRemainingClues()`: Returns uncollected clue count
+
+#### ClueARImageManager.cs  
+- `UpdateTrackedImage(ARTrackedImage)`: Main AR detection and spawning logic
+- `SetActiveClue(int)`: Sets which clue index should spawn AR objects
+- `MarkTreasureAsCollected(int)`: Prevents respawning of collected treasures
+- `ClearAllARObjects()`: Hides all AR objects and collect button
+- `EnableARTracking()` / `DisableARTracking()`: Controls AR system state
+
+### Data Persistence & State Management
+- `collectedClueIndices`: HashSet tracking which treasures have been collected
+- `currentActiveClueIndex`: Which clue should currently spawn AR objects
+- `arObjects`: Dictionary of pre-instantiated GameObjects keyed by image name
+- `cluesFound`: Counter in TreasureHuntManager for completion tracking
+
+### Critical Architectural Decisions
+1. **Pre-instantiation**: All AR objects created at Start() for performance
+2. **State-based spawning**: Only current active clue can spawn AR objects
+3. **Collection persistence**: Once collected, treasures cannot respawn
+4. **Dynamic button management**: Collect button tied directly to AR object visibility
+5. **Scale preservation**: Collected objects remain shrunk to indicate used state

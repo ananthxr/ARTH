@@ -522,33 +522,51 @@ public class TreasureHuntManager : MonoBehaviour
         }
 
         treasureObject.SetActive(false);
-        treasureObject.transform.localScale = startScale; // Reset for reuse
+        // Don't reset scale - keep it shrunk to prevent reuse
+        
+        // Mark treasure as collected in AR manager to prevent respawning
+        if (clueARImageManager != null)
+        {
+            clueARImageManager.MarkTreasureAsCollected(clueIndex);
+        }
 
         cluesFound++;
 
         // Show congrats panel
         congratsPanel.SetActive(true);
-        congratsMessage.text = $"Congrats on finding the treasure!\n" +
-                               $"{GetRemainingClues()} clues remaining.";
+
+        int remaining = GetRemainingClues();
+        if (remaining <= 0)
+        {
+            // Final clue found → show completion message
+            congratsMessage.text = "🎉 Congrats on completing the Treasure Hunt!";
+            nextTreasureButton.gameObject.SetActive(false); // Hide next button
+        }
+        else
+        {
+            // Normal treasure found → show remaining count
+            congratsMessage.text = $"Congrats on finding the treasure!\n" +
+                           $"{remaining} clue{(remaining > 1 ? "s" : "")} remaining.";
+            nextTreasureButton.gameObject.SetActive(true);
+        }
     }
 
 
     public void OnNextTreasure()
     {
-        congratsPanel.SetActive(false);
+    
 
-        // Advance clue index in a circular order
-        clueIndex = (clueIndex + 1) % totalClues;
+    congratsPanel.SetActive(false);  // Hide congrats panel
 
-        // Update clue panel
-        ShowCluePanel();
+    // Move to next clue only if clues remain
+    clueIndex = (clueIndex + 1) % totalClues;
 
-        // Reactivate start hunt button for next treasure
-        startHuntButton.gameObject.SetActive(true);
+    ShowCluePanel();
+    startHuntButton.gameObject.SetActive(true);
 
-        // Hide CollectTreasure button until next AR object spawns
-        if (collectTreasureButton != null)
-            collectTreasureButton.gameObject.SetActive(false);
+    if (collectTreasureButton != null)
+        collectTreasureButton.gameObject.SetActive(false);
     }
+
 
 }
