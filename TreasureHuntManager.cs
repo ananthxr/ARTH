@@ -12,6 +12,10 @@ public class TreasureLocation
     public string clueText;
     public double latitude;
     public double longitude;
+    
+    [Header("Physical Game")]
+    public bool hasPhysicalGame = false;
+    public string physicalGameInstruction = "";
 
     public TreasureLocation(string clue, double lat, double lng)
     {
@@ -65,7 +69,12 @@ public class TreasureHuntManager : MonoBehaviour
     public Button collectTreasureButton;
     public GameObject congratsPanel;
     public TMP_Text congratsMessage;
+    public TMP_Text physicalGameText;
     public Button nextTreasureButton;
+    
+    [Header("Inventory System")]
+    public Button inventoryButton;
+    public InventoryManager inventoryManager;
 
     // Team assignment variables
     private int teamNumber;
@@ -124,6 +133,9 @@ public class TreasureHuntManager : MonoBehaviour
         registerButton.onClick.AddListener(OnRegisterTeam);
         startHuntButton.onClick.AddListener(OnStartHunt);
         nextTreasureButton.onClick.AddListener(OnNextTreasure);
+        
+        if (inventoryButton != null)
+            inventoryButton.onClick.AddListener(OnInventoryButtonClicked);
 
 
         Debug.Log($"Treasure hunt initialized with {totalClues} clues");
@@ -237,6 +249,9 @@ public class TreasureHuntManager : MonoBehaviour
         timerPanel.SetActive(false);
         cluePanel.SetActive(false);
         if (arScanPanel != null) arScanPanel.SetActive(false);
+        
+        // Hide inventory button during registration
+        if (inventoryButton != null) inventoryButton.gameObject.SetActive(false);
     }
 
     private void ShowTimerPanel()
@@ -245,6 +260,9 @@ public class TreasureHuntManager : MonoBehaviour
         timerPanel.SetActive(true);
         cluePanel.SetActive(false);
         if (arScanPanel != null) arScanPanel.SetActive(false);
+        
+        // Hide inventory button during timer
+        if (inventoryButton != null) inventoryButton.gameObject.SetActive(false);
     }
 
     private void ShowCluePanel()
@@ -285,6 +303,9 @@ public class TreasureHuntManager : MonoBehaviour
 
         // Hide the start hunt button completely
         startHuntButton.gameObject.SetActive(false);
+        
+        // Show inventory button once hunt starts
+        if (inventoryButton != null) inventoryButton.gameObject.SetActive(true);
 
         // Enable GPS tracking
         EnableGPSTracking();
@@ -419,6 +440,9 @@ public class TreasureHuntManager : MonoBehaviour
 
         // Keep GPS tracking active but don't reset states since hunt is ongoing
         startHuntButton.interactable = false; // Keep disabled since hunt is ongoing
+        
+        // Show inventory button when returning from AR mode
+        if (inventoryButton != null) inventoryButton.gameObject.SetActive(true);
 
         // Display the clue for this team
         DisplayCurrentClue();
@@ -444,6 +468,9 @@ public class TreasureHuntManager : MonoBehaviour
             clueARImageManager.SetActiveClue(clueIndex);
             clueARImageManager.EnableARTracking();
         }
+        
+        // Hide inventory button when collect treasure button is active
+        if (inventoryButton != null) inventoryButton.gameObject.SetActive(false);
 
         Debug.Log("AR scan mode activated. Look for the treasure marker!");
         if (mobileDebugText != null) mobileDebugText.text = "AR SCAN MODE ACTIVATED! Look for the treasure marker!";
@@ -529,6 +556,12 @@ public class TreasureHuntManager : MonoBehaviour
         {
             clueARImageManager.MarkTreasureAsCollected(clueIndex);
         }
+        
+        // Add treasure to inventory
+        if (inventoryManager != null)
+        {
+            inventoryManager.AddCollectedTreasure(clueIndex);
+        }
 
         cluesFound++;
 
@@ -536,11 +569,17 @@ public class TreasureHuntManager : MonoBehaviour
         congratsPanel.SetActive(true);
 
         int remaining = GetRemainingClues();
+        TreasureLocation currentTreasure = GetCurrentTreasureLocation();
+        
         if (remaining <= 0)
         {
             // Final clue found → show completion message
             congratsMessage.text = "🎉 Congrats on completing the Treasure Hunt!";
             nextTreasureButton.gameObject.SetActive(false); // Hide next button
+            
+            // Hide physical game text for final completion
+            if (physicalGameText != null)
+                physicalGameText.gameObject.SetActive(false);
         }
         else
         {
@@ -548,24 +587,48 @@ public class TreasureHuntManager : MonoBehaviour
             congratsMessage.text = $"Congrats on finding the treasure!\n" +
                            $"{remaining} clue{(remaining > 1 ? "s" : "")} remaining.";
             nextTreasureButton.gameObject.SetActive(true);
+            
+            // Show physical game if configured for this clue
+            if (physicalGameText != null && currentTreasure != null && currentTreasure.hasPhysicalGame)
+            {
+                physicalGameText.gameObject.SetActive(true);
+                physicalGameText.text = currentTreasure.physicalGameInstruction;
+            }
+            else if (physicalGameText != null)
+            {
+                physicalGameText.gameObject.SetActive(false);
+            }
         }
     }
 
 
     public void OnNextTreasure()
     {
+        congratsPanel.SetActive(false);  // Hide congrats panel
+
+        // Move to next clue only if clues remain
+        clueIndex = (clueIndex + 1) % totalClues;
+
+        ShowCluePanel();
+        startHuntButton.gameObject.SetActive(true);
+        
+        // Show inventory button when moving to next treasure
+        if (inventoryButton != null) inventoryButton.gameObject.SetActive(true);
+
+        if (collectTreasureButton != null)
+            collectTreasureButton.gameObject.SetActive(false);
+    }
     
-
-    congratsPanel.SetActive(false);  // Hide congrats panel
-
-    // Move to next clue only if clues remain
-    clueIndex = (clueIndex + 1) % totalClues;
-
-    ShowCluePanel();
-    startHuntButton.gameObject.SetActive(true);
-
-    if (collectTreasureButton != null)
-        collectTreasureButton.gameObject.SetActive(false);
+    public void OnInventoryButtonClicked()
+    {
+        if (inventoryManager != null)
+        {
+            inventoryManager.OpenInventory();
+        }
+        else
+        {
+            Debug.LogWarning("InventoryManager not assigned to TreasureHuntManager!");
+        }
     }
 
 
