@@ -34,8 +34,15 @@ public class TreasureHuntManager : MonoBehaviour
     public GameObject cluePanel;
 
     [Header("Registration UI")]
-    public TMP_InputField teamNumberInput;
-    public Button registerButton;
+    public TMP_InputField uidInput;
+    public Button fetchTeamDataButton;
+    
+    [Header("Team Verification UI")]
+    public GameObject teamVerificationPanel;
+    public TMP_Text teamDetailsText;
+    public TMP_Text teamMembersText;
+    public TMP_Text teamNumberDisplayText;
+    public Button verifyTeamButton;
 
     [Header("Timer UI")]
     public TMP_Text timerDisplay;
@@ -75,6 +82,9 @@ public class TreasureHuntManager : MonoBehaviour
     [Header("Inventory System")]
     public Button inventoryButton;
     public InventoryManager inventoryManager;
+    
+    [Header("Firebase Integration")]
+    public FirebaseFetcher firebaseFetcher;
 
     // Team assignment variables
     private int teamNumber;
@@ -84,6 +94,10 @@ public class TreasureHuntManager : MonoBehaviour
     private DateTime startTime;
     private bool isTimerActive = false;
     private int totalClues;
+    
+    // Firebase team data
+    private TeamData currentTeamData;
+    private bool isTeamVerified = false;
 
     // GPS tracking variables
     private ARWorldPositioningCameraHelper cameraHelper;
@@ -130,12 +144,21 @@ public class TreasureHuntManager : MonoBehaviour
         ShowRegistrationPanel();
 
         // Setup button listeners
-        registerButton.onClick.AddListener(OnRegisterTeam);
+        fetchTeamDataButton.onClick.AddListener(OnFetchTeamData);
+        verifyTeamButton.onClick.AddListener(OnVerifyTeam);
         startHuntButton.onClick.AddListener(OnStartHunt);
         nextTreasureButton.onClick.AddListener(OnNextTreasure);
         
         if (inventoryButton != null)
             inventoryButton.onClick.AddListener(OnInventoryButtonClicked);
+            
+        // Setup Firebase event listeners
+        FirebaseFetcher.OnTeamDataFetched += OnTeamDataReceived;
+        FirebaseFetcher.OnTeamDataFetchFailed += OnTeamDataFetchFailed;
+        
+        // Get or create FirebaseFetcher instance
+        if (firebaseFetcher == null)
+            firebaseFetcher = FirebaseFetcher.Instance;
 
 
         Debug.Log($"Treasure hunt initialized with {totalClues} clues");
@@ -157,28 +180,176 @@ public class TreasureHuntManager : MonoBehaviour
         }
     }
 
-    public void OnRegisterTeam()
+    public void OnFetchTeamData()
     {
-        // Get team number from input
-        if (int.TryParse(teamNumberInput.text, out teamNumber) && teamNumber > 0)
+        try
         {
-            CalculateTeamAssignment();
+            string uid = uidInput?.text?.Trim() ?? "";
+            
+            if (string.IsNullOrEmpty(uid))
+            {
+                Debug.LogWarning("UID cannot be empty");
+                if (mobileDebugText != null) mobileDebugText.text = "WARNING: UID cannot be empty";
+                return;
+            }
+            
+            // Check if Firebase is ready
+            if (firebaseFetcher == null)
+            {
+                Debug.LogError("FirebaseFetcher not assigned");
+                if (mobileDebugText != null) mobileDebugText.text = "ERROR: Firebase not configured";
+                return;
+            }
+            
+            if (!firebaseFetcher.IsFirebaseReady())
+            {
+                Debug.LogWarning("Firebase not ready yet");
+                if (mobileDebugText != null) mobileDebugText.text = "Firebase not ready - please wait";
+                return;
+            }
+            
+            Debug.Log($"Fetching team data for UID: {uid}");
+            if (mobileDebugText != null) mobileDebugText.text = $"Fetching team data for UID: {uid}";
+            
+            // Disable button to prevent multiple requests
+            if (fetchTeamDataButton != null)
+            {
+                fetchTeamDataButton.interactable = false;
+                var buttonText = fetchTeamDataButton.GetComponentInChildren<TMP_Text>();
+                if (buttonText != null) buttonText.text = "Fetching...";
+            }
+            
+            // Use FirebaseFetcher to get team data
+            firebaseFetcher.FetchTeamData(uid);
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"Error in OnFetchTeamData: {e.Message}");
+            if (mobileDebugText != null) mobileDebugText.text = $"ERROR: {e.Message}";
+            
+            // Reset button state on error
+            if (fetchTeamDataButton != null)
+            {
+                fetchTeamDataButton.interactable = true;
+                var buttonText = fetchTeamDataButton.GetComponentInChildren<TMP_Text>();
+                if (buttonText != null) buttonText.text = "Fetch Team Data";
+            }
+        }
+    }
+    
+    private void OnTeamDataReceived(TeamData teamData)
+    {
+        try
+        {
+            if (teamData == null)
+            {
+                Debug.LogError("Received null team data");
+                if (mobileDebugText != null) mobileDebugText.text = "ERROR: Received invalid team data";
+                return;
+            }
+            
+            Debug.Log($"Team data received: {teamData.teamName} (#{teamData.teamNumber})");
+            
+            currentTeamData = teamData;
+            
+            // Reset button state
+            if (fetchTeamDataButton != null)
+            {
+                fetchTeamDataButton.interactable = true;
+                var buttonText = fetchTeamDataButton.GetComponentInChildren<TMP_Text>();
+                if (buttonText != null) buttonText.text = "Fetch Team Data";
+            }
+            
+            // Show team verification panel
+            ShowTeamVerificationPanel();
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"Error in OnTeamDataReceived: {e.Message}");
+            if (mobileDebugText != null) mobileDebugText.text = $"ERROR processing team data: {e.Message}";
+        }
+    }
 
-            if (delayMinutes > 0)
+    // Allow external data providers (e.g., RTDB) to inject team data
+    public void ReceiveExternalTeamData(TeamData teamData)
+    {
+        try
+        {
+            if (teamData == null)
             {
-                ShowTimerPanel();
-                StartTimer();
+                Debug.LogError("Received null team data (external)");
+                if (mobileDebugText != null) mobileDebugText.text = "ERROR: Received invalid team data";
+                return;
             }
-            else
+
+            currentTeamData = teamData;
+
+            // Reset fetch button state if present
+            if (fetchTeamDataButton != null)
             {
-                // No delay - go straight to clue
-                ShowCluePanel();
+                fetchTeamDataButton.interactable = true;
+                var buttonText = fetchTeamDataButton.GetComponentInChildren<TMP_Text>();
+                if (buttonText != null) buttonText.text = "Fetch Team Data";
             }
+
+            // Show team verification panel using existing UI
+            ShowTeamVerificationPanel();
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"Error in ReceiveExternalTeamData: {e.Message}");
+            if (mobileDebugText != null) mobileDebugText.text = $"ERROR processing team data: {e.Message}";
+        }
+    }
+    
+    private void OnTeamDataFetchFailed(string error)
+    {
+        try
+        {
+            Debug.LogError($"Failed to fetch team data: {error}");
+            if (mobileDebugText != null) mobileDebugText.text = $"ERROR: {error}";
+            
+            // Reset button state
+            if (fetchTeamDataButton != null)
+            {
+                fetchTeamDataButton.interactable = true;
+                var buttonText = fetchTeamDataButton.GetComponentInChildren<TMP_Text>();
+                if (buttonText != null) buttonText.text = "Fetch Team Data";
+            }
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"Error in OnTeamDataFetchFailed: {e.Message}");
+        }
+    }
+    
+    public void OnVerifyTeam()
+    {
+        if (currentTeamData == null)
+        {
+            Debug.LogWarning("No team data to verify");
+            return;
+        }
+        
+        // Set the team number from Firebase data
+        teamNumber = currentTeamData.teamNumber;
+        isTeamVerified = true;
+        
+        Debug.Log($"Team verified: {currentTeamData.teamName} (#{teamNumber})");
+        if (mobileDebugText != null) mobileDebugText.text = $"Team verified: {currentTeamData.teamName} (#{teamNumber})";
+        
+        // Now calculate team assignment using Firebase team number
+        CalculateTeamAssignment();
+        
+        if (delayMinutes > 0)
+        {
+            ShowTimerPanel();
+            StartTimer();
         }
         else
         {
-            Debug.LogWarning("Invalid team number entered");
-            if (mobileDebugText != null) mobileDebugText.text = "WARNING: Invalid team number entered";
+            // No delay - go straight to clue
+            ShowCluePanel();
         }
     }
 
@@ -189,8 +360,9 @@ public class TreasureHuntManager : MonoBehaviour
         clueIndex = (teamNumber - 1) % totalClues; // 0-based index for array access
         delayMinutes = wave * 5;
 
-        Debug.Log($"Team {teamNumber}: Wave {wave}, Clue Index {clueIndex + 1}, Delay {delayMinutes} minutes");
-        if (mobileDebugText != null) mobileDebugText.text = $"Team {teamNumber}: Wave {wave}, Clue {clueIndex + 1}, Delay {delayMinutes}min";
+        string teamInfo = currentTeamData != null ? $"{currentTeamData.teamName} (#{teamNumber})" : $"Team {teamNumber}";
+        Debug.Log($"{teamInfo}: Wave {wave}, Clue Index {clueIndex + 1}, Delay {delayMinutes} minutes");
+        if (mobileDebugText != null) mobileDebugText.text = $"{teamInfo}: Wave {wave}, Clue {clueIndex + 1}, Delay {delayMinutes}min";
     }
 
     private void StartTimer()
@@ -200,7 +372,8 @@ public class TreasureHuntManager : MonoBehaviour
         isTimerActive = true;
 
         // Update team info display
-        teamInfoText.text = $"Team {teamNumber}, Wave {wave + 1}";
+        string teamDisplayName = currentTeamData != null ? $"{currentTeamData.teamName} (#{teamNumber})" : $"Team {teamNumber}";
+        teamInfoText.text = $"{teamDisplayName}, Wave {wave + 1}";
         waitingMessage.text = "Waiting for your turn...";
 
         Debug.Log($"Timer started. Team will begin at: {startTime:HH:mm:ss}");
@@ -249,14 +422,41 @@ public class TreasureHuntManager : MonoBehaviour
         timerPanel.SetActive(false);
         cluePanel.SetActive(false);
         if (arScanPanel != null) arScanPanel.SetActive(false);
+        if (teamVerificationPanel != null) teamVerificationPanel.SetActive(false);
         
         // Hide inventory button during registration
         if (inventoryButton != null) inventoryButton.gameObject.SetActive(false);
+        
+        // Reset verification state
+        isTeamVerified = false;
+        currentTeamData = null;
+    }
+    
+    private void ShowTeamVerificationPanel()
+    {
+        if (currentTeamData == null) return;
+        
+        registrationPanel.SetActive(false);
+        teamVerificationPanel.SetActive(true);
+        timerPanel.SetActive(false);
+        cluePanel.SetActive(false);
+        if (arScanPanel != null) arScanPanel.SetActive(false);
+        
+        // Display team information
+        if (teamDetailsText != null)
+            teamDetailsText.text = $"Team: {currentTeamData.teamName}\nEmail: {currentTeamData.email}";
+            
+        if (teamMembersText != null)
+            teamMembersText.text = $"Player 1: {currentTeamData.player1}\nPlayer 2: {currentTeamData.player2}";
+            
+        if (teamNumberDisplayText != null)
+            teamNumberDisplayText.text = $"Team Number: {currentTeamData.teamNumber}";
     }
 
     private void ShowTimerPanel()
     {
         registrationPanel.SetActive(false);
+        if (teamVerificationPanel != null) teamVerificationPanel.SetActive(false);
         timerPanel.SetActive(true);
         cluePanel.SetActive(false);
         if (arScanPanel != null) arScanPanel.SetActive(false);
@@ -268,6 +468,7 @@ public class TreasureHuntManager : MonoBehaviour
     private void ShowCluePanel()
     {
         registrationPanel.SetActive(false);
+        if (teamVerificationPanel != null) teamVerificationPanel.SetActive(false);
         timerPanel.SetActive(false);
         cluePanel.SetActive(true);
         if (arScanPanel != null) arScanPanel.SetActive(false);
@@ -629,6 +830,13 @@ public class TreasureHuntManager : MonoBehaviour
         {
             Debug.LogWarning("InventoryManager not assigned to TreasureHuntManager!");
         }
+    }
+    
+    void OnDestroy()
+    {
+        // Cleanup Firebase event listeners
+        FirebaseFetcher.OnTeamDataFetched -= OnTeamDataReceived;
+        FirebaseFetcher.OnTeamDataFetchFailed -= OnTeamDataFetchFailed;
     }
 
 
