@@ -141,6 +141,20 @@ When adding new AR content:
 
 ## Recent Updates & Debugging
 
+### V1.6 — Realtime Database Flow (Unity)
+- Read-only integration with Firebase Realtime Database (RTDB)
+- `FirebaseRTDBFetcher` fetches `<BASE_URL>/<UID>.json` via UnityWebRequest
+- On success: shows verification panel, hides registration panel
+- On "I verified": converts JSON to shared `TeamData` and calls:
+  - `TreasureHuntManager.ReceiveExternalTeamData(team)`
+  - `TreasureHuntManager.OnVerifyTeam()` to proceed with wave/clue/timer logic
+- On errors: inline `uidStatusText` shows "Please enter a UID", "UID not found", or network errors
+
+Wiring:
+- Assign `Uid Input`, `Fetch Button`, `Uid Status Text`, `Verification Panel`, `Verification Text`, `I Verified Button`, and `TreasureHuntManager` in the inspector.
+- Base URL example: `https://arth2-169a4-default-rtdb.firebaseio.com`
+- Optional `authToken` if RTDB rules require it.
+
 ### Mobile Debug System (Latest)
 Both TreasureHuntManager and ClueARImageManager now have mobile debug capabilities:
 - Added `mobileDebugText` field (TMP_Text) for on-screen debugging

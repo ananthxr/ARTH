@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Text;
 using TMPro;
 using UnityEngine;
 using UnityEngine.Networking;
@@ -39,6 +40,20 @@ public class FirebaseRTDBFetcher : MonoBehaviour
     public Button iVerifiedButton;
     public TreasureHuntManager treasureHuntManager;
 
+    [Header("Scoring (Main Score)")]
+    [Tooltip("Enable to update the team's main score in RTDB when a treasure is collected (based on progress)")]
+    public bool enableScoreSync = true;
+    [Tooltip("Points added to main score per collected treasure")]
+    public int scorePerTreasure = 100;
+    [Tooltip("When true, score is auto-incremented from progress (cluesCompleted). When false, use AddScore(points) explicitly.")]
+    public bool autoScoreFromProgress = false;
+
+    [Header("Session Sync (RTDB)")]
+    [Tooltip("When enabled, will write session status (started, current clue, clues completed) under UID/session")] 
+    public bool enableSessionSync = true;
+    [Tooltip("Polling interval in seconds for progress sync")] 
+    public float sessionSyncIntervalSeconds = 2f;
+
     private void Start()
     {
         if (fetchButton != null) fetchButton.onClick.AddListener(OnFetchButtonClicked);
@@ -47,6 +62,18 @@ public class FirebaseRTDBFetcher : MonoBehaviour
         if (treasureHuntManager == null)
         {
             treasureHuntManager = FindObjectOfType<TreasureHuntManager>();
+        }
+
+        // Also hook into Start Hunt button to mark session started when pressed
+        if (enableSessionSync && treasureHuntManager != null && treasureHuntManager.startHuntButton != null)
+        {
+            treasureHuntManager.startHuntButton.onClick.AddListener(() =>
+            {
+                if (!string.IsNullOrEmpty(_activeUid))
+                {
+                    StartCoroutine(PatchSessionField(_activeUid, "started", true));
+                }
+            });
         }
     }
 
@@ -178,6 +205,16 @@ public class FirebaseRTDBFetcher : MonoBehaviour
                 }
 
                 _lastFetched = result;
+
+                // Remember active UID for session sync
+                _activeUid = uidInput != null ? (uidInput.text ?? string.Empty).Trim() : string.Empty;
+                if (enableSessionSync && !string.IsNullOrEmpty(_activeUid))
+                {
+                    // Initialize session as not started
+                    StartCoroutine(PatchSessionField(_activeUid, "started", false));
+                    // Start polling loop
+                    RestartSessionSyncLoop();
+                }
             }
             else
             {
@@ -188,6 +225,11 @@ public class FirebaseRTDBFetcher : MonoBehaviour
     }
 
     private TeamDataRTDB _lastFetched;
+    private string _activeUid;
+    private Coroutine _sessionSyncRoutine;
+    private bool _lastSentStarted;
+    private int _lastSentCurrentClue;
+    private int _lastSentCompleted;
 
     private void OnIVerifiedClicked()
     {
@@ -223,6 +265,189 @@ public class FirebaseRTDBFetcher : MonoBehaviour
         if (verificationPanel != null)
         {
             verificationPanel.SetActive(false);
+        }
+    }
+
+    private void RestartSessionSyncLoop()
+    {
+        if (!enableSessionSync) return;
+        if (_sessionSyncRoutine != null)
+        {
+            StopCoroutine(_sessionSyncRoutine);
+        }
+        _sessionSyncRoutine = StartCoroutine(SessionSyncLoop());
+    }
+
+    private IEnumerator SessionSyncLoop()
+    {
+        _lastSentStarted = false;
+        _lastSentCurrentClue = -1;
+        _lastSentCompleted = -1;
+        var wait = new WaitForSeconds(sessionSyncIntervalSeconds);
+        while (enableSessionSync && !string.IsNullOrEmpty(_activeUid))
+        {
+            bool started = false;
+            int currentClue = 0;
+            int completed = 0;
+
+            if (treasureHuntManager != null)
+            {
+                started = treasureHuntManager.IsGPSTrackingActive();
+                currentClue = Mathf.Max(0, treasureHuntManager.GetClueIndex()); // 1-based per manager
+                int total = treasureHuntManager.GetTotalClues();
+                int remaining = treasureHuntManager.GetRemainingClues();
+                completed = Mathf.Clamp(total - remaining, 0, total);
+            }
+
+            // Batch PATCH of changed fields
+            var hasChange = (started != _lastSentStarted) || (currentClue != _lastSentCurrentClue) || (completed != _lastSentCompleted);
+            if (hasChange)
+            {
+                string json = BuildSessionJson(startedChanged: started != _lastSentStarted, started: started,
+                                               currentChanged: currentClue != _lastSentCurrentClue, currentClue: currentClue,
+                                               completedChanged: completed != _lastSentCompleted, completed: completed);
+                if (!string.IsNullOrEmpty(json))
+                {
+                    yield return PatchSessionJson(_activeUid, json);
+                    _lastSentStarted = started;
+                    _lastSentCurrentClue = currentClue;
+                    // If completed increased, update score
+                    if (enableScoreSync && autoScoreFromProgress && completed > _lastSentCompleted)
+                    {
+                        int delta = completed - _lastSentCompleted;
+                        int points = Mathf.Max(0, delta * Mathf.Max(0, scorePerTreasure));
+                        if (points > 0)
+                        {
+                            yield return UpdateScoreBy(_activeUid, points);
+                        }
+                    }
+                    _lastSentCompleted = completed;
+                }
+            }
+
+            yield return wait;
+        }
+    }
+
+    private string BuildSessionJson(bool startedChanged, bool started, bool currentChanged, int currentClue, bool completedChanged, int completed)
+    {
+        // Build minimal JSON with only changed fields
+        System.Text.StringBuilder sb = new System.Text.StringBuilder();
+        sb.Append("{");
+        bool wrote = false;
+        if (startedChanged)
+        {
+            sb.AppendFormat("\"started\":{0}", started ? "true" : "false");
+            wrote = true;
+        }
+        if (currentChanged)
+        {
+            if (wrote) sb.Append(",");
+            sb.AppendFormat("\"currentClueNumber\":{0}", currentClue);
+            wrote = true;
+        }
+        if (completedChanged)
+        {
+            if (wrote) sb.Append(",");
+            sb.AppendFormat("\"cluesCompleted\":{0}", completed);
+            wrote = true;
+        }
+        sb.Append("}");
+        return wrote ? sb.ToString() : string.Empty;
+    }
+
+    private IEnumerator PatchSessionField(string uid, string key, bool value)
+    {
+        string json = $"{{\"{key}\":{(value ? "true" : "false")}}}";
+        yield return PatchSessionJson(uid, json);
+    }
+
+    private IEnumerator PatchSessionJson(string uid, string json)
+    {
+        if (string.IsNullOrEmpty(uid)) yield break;
+        string url = BuildUrl(uid + "/session");
+        using (var request = new UnityWebRequest(url, "PATCH"))
+        {
+            byte[] body = Encoding.UTF8.GetBytes(json);
+            request.uploadHandler = new UploadHandlerRaw(body);
+            request.downloadHandler = new DownloadHandlerBuffer();
+            request.SetRequestHeader("Content-Type", "application/json");
+            request.timeout = 10;
+            yield return request.SendWebRequest();
+            if (request.result != UnityWebRequest.Result.Success)
+            {
+                LogError($"PATCH session failed: {request.error}");
+            }
+        }
+    }
+
+    // ---------------- Score Update (Main score on team root) ----------------
+    private IEnumerator UpdateScoreBy(string uid, int delta)
+    {
+        if (string.IsNullOrEmpty(uid) || delta == 0) yield break;
+        // Read current score
+        string getUrl = BuildUrl(uid + "/score");
+        int current = 0;
+        using (var request = UnityWebRequest.Get(getUrl))
+        {
+            request.timeout = 10;
+            yield return request.SendWebRequest();
+            if (request.result == UnityWebRequest.Result.Success)
+            {
+                string raw = request.downloadHandler.text;
+                // raw is typically a number or null
+                if (!string.IsNullOrWhiteSpace(raw) && raw != "null")
+                {
+                    int.TryParse(raw, out current);
+                }
+            }
+        }
+        int updated = current + delta;
+        // Patch new score at team root
+        string patchJson = $"\"score\":{updated}";
+        yield return PatchTeamJson(uid, patchJson);
+    }
+
+    private IEnumerator PatchTeamJson(string uid, string json)
+    {
+        string url = BuildUrl(uid);
+        using (var request = new UnityWebRequest(url, "PATCH"))
+        {
+            byte[] body = Encoding.UTF8.GetBytes("{" + json + "}");
+            request.uploadHandler = new UploadHandlerRaw(body);
+            request.downloadHandler = new DownloadHandlerBuffer();
+            request.SetRequestHeader("Content-Type", "application/json");
+            request.timeout = 10;
+            yield return request.SendWebRequest();
+            if (request.result != UnityWebRequest.Result.Success)
+            {
+                LogError($"PATCH team failed: {request.error}");
+            }
+        }
+    }
+
+    // ---------------- Physical Game Result (explicit call) ----------------
+    public void SetPhysicalGameResult(bool played, int score)
+    {
+        if (string.IsNullOrEmpty(_activeUid)) return;
+        string json = $"{{\"physicalGamePlayed\":{(played ? "true" : "false")},\"physicalGameScore\":{Mathf.Max(0, score)}}}";
+        StartCoroutine(PatchSessionJson(_activeUid, json));
+    }
+
+    // Public API to explicitly add points to main score
+    public void AddScore(int points)
+    {
+        if (!enableScoreSync) return;
+        if (points <= 0) return;
+        if (string.IsNullOrEmpty(_activeUid)) return;
+        StartCoroutine(UpdateScoreBy(_activeUid, points));
+    }
+
+    private void OnDestroy()
+    {
+        if (_sessionSyncRoutine != null)
+        {
+            StopCoroutine(_sessionSyncRoutine);
         }
     }
 

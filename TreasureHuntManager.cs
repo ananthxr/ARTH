@@ -85,6 +85,11 @@ public class TreasureHuntManager : MonoBehaviour
     
     [Header("Firebase Integration")]
     public FirebaseFetcher firebaseFetcher;
+    [Header("Scoring")]
+    [Tooltip("Points awarded per collected AR treasure")] 
+    public int scorePerTreasure = 100;
+    [Tooltip("Optional RTDB fetcher to update main score when treasures are collected")] 
+    public FirebaseRTDBFetcher rtdbFetcher;
 
     // Team assignment variables
     private int teamNumber;
@@ -159,6 +164,10 @@ public class TreasureHuntManager : MonoBehaviour
         // Get or create FirebaseFetcher instance
         if (firebaseFetcher == null)
             firebaseFetcher = FirebaseFetcher.Instance;
+
+        // Try auto-find RTDB fetcher if not assigned
+        if (rtdbFetcher == null)
+            rtdbFetcher = FindObjectOfType<FirebaseRTDBFetcher>();
 
 
         Debug.Log($"Treasure hunt initialized with {totalClues} clues");
@@ -765,6 +774,12 @@ public class TreasureHuntManager : MonoBehaviour
         }
 
         cluesFound++;
+
+        // Add main score on collection
+        if (rtdbFetcher != null && scorePerTreasure > 0)
+        {
+            rtdbFetcher.AddScore(scorePerTreasure);
+        }
 
         // Show congrats panel
         congratsPanel.SetActive(true);
