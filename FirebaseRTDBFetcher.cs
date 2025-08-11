@@ -23,7 +23,7 @@ public class FirebaseRTDBFetcher : MonoBehaviour
     [Tooltip("Base RTDB URL without trailing slash. Example: https://arth2-169a4-default-rtdb.firebaseio.com")]
     public string realtimeDatabaseBaseUrl = "https://arth2-169a4-default-rtdb.firebaseio.com";
 
-    [Tooltip("Node path under the DB where the team will be stored. Example: 26SIG")] 
+    [Tooltip("Node path under the DB where the team will be stored. Example: 26SIG")]
     public string nodePath = "26SIG";
 
     [Tooltip("Optional auth token or database secret. Leave blank if rules allow public read/write for testing.")]
@@ -49,9 +49,9 @@ public class FirebaseRTDBFetcher : MonoBehaviour
     public bool autoScoreFromProgress = false;
 
     [Header("Session Sync (RTDB)")]
-    [Tooltip("When enabled, will write session status (started, current clue, clues completed) under UID/session")] 
+    [Tooltip("When enabled, will write session status (started, current clue, clues completed) under UID/session")]
     public bool enableSessionSync = true;
-    [Tooltip("Polling interval in seconds for progress sync")] 
+    [Tooltip("Polling interval in seconds for progress sync")]
     public float sessionSyncIntervalSeconds = 2f;
 
     private void Start()
@@ -114,19 +114,19 @@ public class FirebaseRTDBFetcher : MonoBehaviour
     private IEnumerator GetTeamData()
     {
         string url = BuildUrl();
-        
+
         using (var request = UnityWebRequest.Get(url))
         {
             request.timeout = 15;
             yield return request.SendWebRequest();
-            
+
             if (request.result != UnityWebRequest.Result.Success)
             {
                 LogError($"GET failed: {request.error}");
                 if (outputText != null) outputText.text = $"GET failed: {request.error}";
                 yield break;
             }
-            
+
             string json = request.downloadHandler.text;
             TeamDataRTDB result = null;
             try
@@ -134,7 +134,7 @@ public class FirebaseRTDBFetcher : MonoBehaviour
                 result = JsonUtility.FromJson<TeamDataRTDB>(json);
             }
             catch { }
-            
+
             if (result != null)
             {
                 string pretty = $"Name: {result.teamName}\n#:{result.teamNumber}\nUID:{result.uid}\nPlayers:{result.player1} & {result.player2}\nEmail:{result.email}\nScore:{result.score}";
@@ -456,5 +456,3 @@ public class FirebaseRTDBFetcher : MonoBehaviour
         Debug.LogError($"[FirebaseRTDBFetcher] {message}");
     }
 }
-
-
