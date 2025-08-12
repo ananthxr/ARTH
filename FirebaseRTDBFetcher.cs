@@ -4,6 +4,8 @@ using TMPro;
 using UnityEngine;
 using UnityEngine.Networking;
 using UnityEngine.UI;
+using UnityEngine.XR.ARFoundation;
+using UnityEngine.XR.ARSubsystems;
 
 [System.Serializable]
 public class TeamDataRTDB
@@ -61,6 +63,12 @@ public class FirebaseRTDBFetcher : MonoBehaviour
     public float volunteerCheckInterval = 3f;
     [Tooltip("Full-screen Mayday panel that blocks all gameplay")]
     public GameObject maydayPanel;
+    
+    [Header("AR Session Integration")]
+    [Tooltip("Wait for AR Session to be tracking before making any network calls")]
+    public bool waitForARSession = true;
+    [Tooltip("AR Session component - will be found automatically if not assigned")]
+    public ARSession arSession;
 
     private void Start()
     {
@@ -71,6 +79,12 @@ public class FirebaseRTDBFetcher : MonoBehaviour
         {
             treasureHuntManager = FindObjectOfType<TreasureHuntManager>();
         }
+        
+        // Find AR Session if not assigned
+        if (waitForARSession && arSession == null)
+        {
+            arSession = FindObjectOfType<ARSession>();
+        }
 
         // Also hook into Start Hunt button to mark session started when pressed
         if (enableSessionSync && treasureHuntManager != null && treasureHuntManager.startHuntButton != null)
@@ -79,7 +93,7 @@ public class FirebaseRTDBFetcher : MonoBehaviour
             {
                 if (!string.IsNullOrEmpty(_activeUid))
                 {
-                    StartCoroutine(PatchSessionField(_activeUid, "started", true));
+                    StartCoroutine(WaitForARSessionThenExecute(() => PatchSessionField(_activeUid, "started", true)));
                 }
             });
         }
@@ -99,13 +113,13 @@ public class FirebaseRTDBFetcher : MonoBehaviour
         // Check game control before proceeding with team data fetch
         if (enableGameControl)
         {
-            StartCoroutine(CheckGameStatusAndFetchTeam(uid));
+            StartCoroutine(WaitForARSessionThenExecute(() => CheckGameStatusAndFetchTeam(uid)));
             return;
         }
         
         // Original flow if game control is disabled
         if (outputText != null) outputText.text = $"Fetching UID: {uid}...";
-        StartCoroutine(GetTeamData(uid));
+        StartCoroutine(WaitForARSessionThenExecute(() => GetTeamData(uid)));
     }
 
     private IEnumerator CheckGameStatusAndFetchTeam(string uid)
@@ -118,7 +132,7 @@ public class FirebaseRTDBFetcher : MonoBehaviour
         {
             // Game is allowed - proceed with team data fetch
             if (outputText != null) outputText.text = $"Fetching UID: {uid}...";
-            StartCoroutine(GetTeamData(uid));
+            yield return StartCoroutine(GetTeamData(uid));
         }
         else
         {
@@ -246,7 +260,7 @@ public class FirebaseRTDBFetcher : MonoBehaviour
                 _activeUid = uidInput != null ? (uidInput.text ?? string.Empty).Trim() : string.Empty;
                 if (enableSessionSync && !string.IsNullOrEmpty(_activeUid))
                 {
-                    // Initialize session as not started
+                    // Initialize session as not started (already AR session ready if we reach here)
                     StartCoroutine(PatchSessionField(_activeUid, "started", false));
                     // Start polling loop
                     RestartSessionSyncLoop();
@@ -271,6 +285,9 @@ public class FirebaseRTDBFetcher : MonoBehaviour
     private Coroutine _volunteerMonitorRoutine;
     private bool _gameAllowed = false;
     private bool _lastGameState = false;
+    
+    // AR Session tracking
+    private bool _arSessionReady = false;
 
     private void OnIVerifiedClicked()
     {
@@ -477,7 +494,7 @@ public class FirebaseRTDBFetcher : MonoBehaviour
     {
         if (string.IsNullOrEmpty(_activeUid)) return;
         string json = $"{{\"physicalGamePlayed\":{(played ? "true" : "false")},\"physicalGameScore\":{Mathf.Max(0, score)}}}";
-        StartCoroutine(PatchSessionJson(_activeUid, json));
+        StartCoroutine(WaitForARSessionThenExecute(() => PatchSessionJson(_activeUid, json)));
     }
 
     // Public API to explicitly add points to main score
@@ -486,7 +503,7 @@ public class FirebaseRTDBFetcher : MonoBehaviour
         if (!enableScoreSync) return;
         if (points <= 0) return;
         if (string.IsNullOrEmpty(_activeUid)) return;
-        StartCoroutine(UpdateScoreBy(_activeUid, points));
+        StartCoroutine(WaitForARSessionThenExecute(() => UpdateScoreBy(_activeUid, points)));
     }
 
     private void OnDestroy()
@@ -603,6 +620,54 @@ public class FirebaseRTDBFetcher : MonoBehaviour
         }
     }
 
+    // AR Session checking methods
+    private bool IsARSessionReady()
+    {
+        if (!waitForARSession) return true;
+        if (arSession == null) return false;
+        return ARSession.state == ARSessionState.SessionTracking;
+    }
+    
+    private IEnumerator WaitForARSessionThenExecute(System.Func<IEnumerator> networkAction)
+    {
+        yield return StartCoroutine(WaitForARSession());
+        yield return StartCoroutine(networkAction());
+    }
+    
+    private IEnumerator WaitForARSessionThenExecute(System.Action networkAction)
+    {
+        yield return StartCoroutine(WaitForARSession());
+        networkAction();
+    }
+    
+    private IEnumerator WaitForARSession()
+    {
+        if (!waitForARSession)
+        {
+            yield break;
+        }
+        
+        // Show status message while waiting
+        if (uidStatusText != null && !IsARSessionReady())
+        {
+            uidStatusText.text = "Initializing AR system...";
+        }
+        
+        // Wait for AR Session to be ready
+        while (!IsARSessionReady())
+        {
+            yield return new WaitForSeconds(0.1f);
+        }
+        
+        // Clear status message
+        if (uidStatusText != null)
+        {
+            uidStatusText.text = "";
+        }
+        
+        Debug.Log("[FirebaseRTDBFetcher] AR Session is ready - proceeding with network operations");
+    }
+    
     private void LogError(string message)
     {
         Debug.LogError($"[FirebaseRTDBFetcher] {message}");
