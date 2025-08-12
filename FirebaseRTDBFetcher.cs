@@ -54,6 +54,14 @@ public class FirebaseRTDBFetcher : MonoBehaviour
     [Tooltip("Polling interval in seconds for progress sync")]
     public float sessionSyncIntervalSeconds = 2f;
 
+    [Header("Game Control (Volunteer Node)")]
+    [Tooltip("Enable volunteer-controlled game start/stop system")]
+    public bool enableGameControl = true;
+    [Tooltip("How often to check volunteer node for game control (seconds)")]
+    public float volunteerCheckInterval = 3f;
+    [Tooltip("Full-screen Mayday panel that blocks all gameplay")]
+    public GameObject maydayPanel;
+
     private void Start()
     {
         if (fetchButton != null) fetchButton.onClick.AddListener(OnFetchButtonClicked);
@@ -87,8 +95,36 @@ public class FirebaseRTDBFetcher : MonoBehaviour
             return;
         }
         if (uidStatusText != null) uidStatusText.text = "";
+        
+        // Check game control before proceeding with team data fetch
+        if (enableGameControl)
+        {
+            StartCoroutine(CheckGameStatusAndFetchTeam(uid));
+            return;
+        }
+        
+        // Original flow if game control is disabled
         if (outputText != null) outputText.text = $"Fetching UID: {uid}...";
         StartCoroutine(GetTeamData(uid));
+    }
+
+    private IEnumerator CheckGameStatusAndFetchTeam(string uid)
+    {
+        if (uidStatusText != null) uidStatusText.text = "Checking game status...";
+        
+        yield return StartCoroutine(CheckVolunteerGameStatus());
+        
+        if (_gameAllowed)
+        {
+            // Game is allowed - proceed with team data fetch
+            if (outputText != null) outputText.text = $"Fetching UID: {uid}...";
+            StartCoroutine(GetTeamData(uid));
+        }
+        else
+        {
+            // Game not started - show message and don't fetch team data
+            if (uidStatusText != null) uidStatusText.text = "The game has not started yet. Please wait for further instructions.";
+        }
     }
 
 
@@ -231,6 +267,11 @@ public class FirebaseRTDBFetcher : MonoBehaviour
     private int _lastSentCurrentClue;
     private int _lastSentCompleted;
 
+    // Game control variables
+    private Coroutine _volunteerMonitorRoutine;
+    private bool _gameAllowed = false;
+    private bool _lastGameState = false;
+
     private void OnIVerifiedClicked()
     {
         if (_lastFetched == null)
@@ -255,6 +296,10 @@ public class FirebaseRTDBFetcher : MonoBehaviour
             treasureHuntManager.ReceiveExternalTeamData(team);
             // Immediately proceed as if the user confirmed in the core flow
             treasureHuntManager.OnVerifyTeam();
+            
+            // Start continuous monitoring once game begins
+            if (enableGameControl)
+                StartVolunteerMonitoring();
         }
         else
         {
@@ -342,6 +387,7 @@ public class FirebaseRTDBFetcher : MonoBehaviour
         }
         if (currentChanged)
         {
+    
             if (wrote) sb.Append(",");
             sb.AppendFormat("\"currentClueNumber\":{0}", currentClue);
             wrote = true;
@@ -448,6 +494,112 @@ public class FirebaseRTDBFetcher : MonoBehaviour
         if (_sessionSyncRoutine != null)
         {
             StopCoroutine(_sessionSyncRoutine);
+        }
+        if (_volunteerMonitorRoutine != null)
+        {
+            StopCoroutine(_volunteerMonitorRoutine);
+        }
+    }
+
+    // ---------------- Volunteer Game Control System ----------------
+    
+    private IEnumerator CheckVolunteerGameStatus()
+    {
+        string url = BuildUrl("volunteer/start");
+        
+        using (var request = UnityWebRequest.Get(url))
+        {
+            request.timeout = 10;
+            yield return request.SendWebRequest();
+            
+            if (request.result == UnityWebRequest.Result.Success)
+            {
+                string response = request.downloadHandler.text;
+                // Response will be "true", "false", or "null"
+                _gameAllowed = response.Trim().ToLower() == "true";
+                
+                Debug.Log($"Volunteer game status: {(_gameAllowed ? "ALLOWED" : "NOT ALLOWED")}");
+            }
+            else
+            {
+                // If can't reach volunteer node, default to not allowed for safety
+                _gameAllowed = false;
+                LogError($"Failed to check volunteer status: {request.error}");
+            }
+        }
+    }
+    
+    private void StartVolunteerMonitoring()
+    {
+        if (!enableGameControl) return;
+        
+        if (_volunteerMonitorRoutine != null)
+        {
+            StopCoroutine(_volunteerMonitorRoutine);
+        }
+        
+        _volunteerMonitorRoutine = StartCoroutine(VolunteerMonitorLoop());
+        _lastGameState = _gameAllowed;
+    }
+    
+    private IEnumerator VolunteerMonitorLoop()
+    {
+        var wait = new WaitForSeconds(volunteerCheckInterval);
+        
+        while (enableGameControl)
+        {
+            yield return StartCoroutine(CheckVolunteerGameStatus());
+            
+            // Check if game state changed
+            if (_gameAllowed != _lastGameState)
+            {
+                if (!_gameAllowed)
+                {
+                    // Game was stopped - show Mayday panel
+                    ShowMaydayPanel();
+                    Debug.Log("GAME STOPPED BY VOLUNTEER - Mayday panel activated");
+                }
+                else
+                {
+                    // Game was re-enabled - hide Mayday panel
+                    HideMaydayPanel();
+                    Debug.Log("GAME RE-ENABLED BY VOLUNTEER - Mayday panel hidden");
+                }
+                
+                _lastGameState = _gameAllowed;
+            }
+            
+            yield return wait;
+        }
+    }
+    
+    private void ShowMaydayPanel()
+    {
+        if (maydayPanel != null)
+        {
+            maydayPanel.SetActive(true);
+            // Mayday panel should be highest priority UI element
+            maydayPanel.transform.SetAsLastSibling();
+        }
+        
+        // Pause all game activities by disabling treasure hunt manager
+        if (treasureHuntManager != null)
+        {
+            treasureHuntManager.enabled = false;
+        }
+    }
+    
+    private void HideMaydayPanel()
+    {
+        if (maydayPanel != null)
+        {
+            maydayPanel.SetActive(false);
+        }
+        
+        // Re-enable game activities
+        if (treasureHuntManager != null)
+        {
+            treasureHuntManager.enabled = true;
         }
     }
 
