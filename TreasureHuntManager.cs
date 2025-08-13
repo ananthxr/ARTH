@@ -94,7 +94,8 @@ public class TreasureHuntManager : MonoBehaviour
     public InventoryManager inventoryManager;
 
     [Header("Firebase Integration")]
-    public FirebaseFetcher firebaseFetcher;
+    public FirebaseRTDBFetcher firebaseRTDBFetcher;
+    public ProgressManager progressManager;
     [Header("Scoring")]
     [Tooltip("Points awarded per collected AR treasure")]
     public int scorePerTreasure = 100;
@@ -164,7 +165,7 @@ public class TreasureHuntManager : MonoBehaviour
         InitializePhysicalGameUI();
 
         // Setup button listeners
-        fetchTeamDataButton.onClick.AddListener(OnFetchTeamData);
+        // Note: fetchTeamDataButton is handled by FirebaseRTDBFetcher
         verifyTeamButton.onClick.AddListener(OnVerifyTeam);
         startHuntButton.onClick.AddListener(OnStartHunt);
         nextTreasureButton.onClick.AddListener(OnNextTreasure);
@@ -176,17 +177,17 @@ public class TreasureHuntManager : MonoBehaviour
         if (verifyPhysicalGameButton != null)
             verifyPhysicalGameButton.onClick.AddListener(OnVerifyPhysicalGameCode);
 
-        // Setup Firebase event listeners
-        FirebaseFetcher.OnTeamDataFetched += OnTeamDataReceived;
-        FirebaseFetcher.OnTeamDataFetchFailed += OnTeamDataFetchFailed;
-
-        // Get or create FirebaseFetcher instance
-        if (firebaseFetcher == null)
-            firebaseFetcher = FirebaseFetcher.Instance;
+        // Try auto-find Firebase RTDB fetcher if not assigned
+        if (firebaseRTDBFetcher == null)
+            firebaseRTDBFetcher = FindObjectOfType<FirebaseRTDBFetcher>();
 
         // Try auto-find RTDB fetcher if not assigned
         if (rtdbFetcher == null)
             rtdbFetcher = FindObjectOfType<FirebaseRTDBFetcher>();
+        
+        // Try auto-find ProgressManager if not assigned
+        if (progressManager == null)
+            progressManager = FindObjectOfType<ProgressManager>();
 
 
         Debug.Log($"Treasure hunt initialized with {totalClues} clues");
@@ -208,95 +209,9 @@ public class TreasureHuntManager : MonoBehaviour
         }
     }
 
-    public void OnFetchTeamData()
-    {
-        try
-        {
-            string uid = uidInput?.text?.Trim() ?? "";
+    // OnFetchTeamData method removed - now handled by FirebaseRTDBFetcher
 
-            if (string.IsNullOrEmpty(uid))
-            {
-                Debug.LogWarning("UID cannot be empty");
-                if (mobileDebugText != null) mobileDebugText.text = "WARNING: UID cannot be empty";
-                return;
-            }
-
-            // Check if Firebase is ready
-            if (firebaseFetcher == null)
-            {
-                Debug.LogError("FirebaseFetcher not assigned");
-                if (mobileDebugText != null) mobileDebugText.text = "ERROR: Firebase not configured";
-                return;
-            }
-
-            if (!firebaseFetcher.IsFirebaseReady())
-            {
-                Debug.LogWarning("Firebase not ready yet");
-                if (mobileDebugText != null) mobileDebugText.text = "Firebase not ready - please wait";
-                return;
-            }
-
-            Debug.Log($"Fetching team data for UID: {uid}");
-            if (mobileDebugText != null) mobileDebugText.text = $"Fetching team data for UID: {uid}";
-
-            // Disable button to prevent multiple requests
-            if (fetchTeamDataButton != null)
-            {
-                fetchTeamDataButton.interactable = false;
-                var buttonText = fetchTeamDataButton.GetComponentInChildren<TMP_Text>();
-                if (buttonText != null) buttonText.text = "Fetching...";
-            }
-
-            // Use FirebaseFetcher to get team data
-            firebaseFetcher.FetchTeamData(uid);
-        }
-        catch (System.Exception e)
-        {
-            Debug.LogError($"Error in OnFetchTeamData: {e.Message}");
-            if (mobileDebugText != null) mobileDebugText.text = $"ERROR: {e.Message}";
-
-            // Reset button state on error
-            if (fetchTeamDataButton != null)
-            {
-                fetchTeamDataButton.interactable = true;
-                var buttonText = fetchTeamDataButton.GetComponentInChildren<TMP_Text>();
-                if (buttonText != null) buttonText.text = "Fetch Team Data";
-            }
-        }
-    }
-
-    private void OnTeamDataReceived(TeamData teamData)
-    {
-        try
-        {
-            if (teamData == null)
-            {
-                Debug.LogError("Received null team data");
-                if (mobileDebugText != null) mobileDebugText.text = "ERROR: Received invalid team data";
-                return;
-            }
-
-            Debug.Log($"Team data received: {teamData.teamName} (#{teamData.teamNumber})");
-
-            currentTeamData = teamData;
-
-            // Reset button state
-            if (fetchTeamDataButton != null)
-            {
-                fetchTeamDataButton.interactable = true;
-                var buttonText = fetchTeamDataButton.GetComponentInChildren<TMP_Text>();
-                if (buttonText != null) buttonText.text = "Fetch Team Data";
-            }
-
-            // Show team verification panel
-            ShowTeamVerificationPanel();
-        }
-        catch (System.Exception e)
-        {
-            Debug.LogError($"Error in OnTeamDataReceived: {e.Message}");
-            if (mobileDebugText != null) mobileDebugText.text = $"ERROR processing team data: {e.Message}";
-        }
-    }
+    // OnTeamDataReceived method removed - now handled by FirebaseRTDBFetcher
 
     // Allow external data providers (e.g., RTDB) to inject team data
     public void ReceiveExternalTeamData(TeamData teamData)
@@ -329,27 +244,143 @@ public class TreasureHuntManager : MonoBehaviour
             if (mobileDebugText != null) mobileDebugText.text = $"ERROR processing team data: {e.Message}";
         }
     }
-
-    private void OnTeamDataFetchFailed(string error)
+    
+    // Resume game from existing session data (called by FirebaseRTDBFetcher)
+    public void ResumeFromSession(TeamData teamData, SessionData sessionData)
     {
         try
         {
-            Debug.LogError($"Failed to fetch team data: {error}");
-            if (mobileDebugText != null) mobileDebugText.text = $"ERROR: {error}";
-
-            // Reset button state
-            if (fetchTeamDataButton != null)
+            if (teamData == null || sessionData == null)
             {
-                fetchTeamDataButton.interactable = true;
-                var buttonText = fetchTeamDataButton.GetComponentInChildren<TMP_Text>();
-                if (buttonText != null) buttonText.text = "Fetch Team Data";
+                Debug.LogError("Cannot resume: missing team data or session data");
+                if (mobileDebugText != null) mobileDebugText.text = "ERROR: Cannot resume game - missing data";
+                return;
             }
+            
+            // Set team data
+            currentTeamData = teamData;
+            teamNumber = teamData.teamNumber;
+            isTeamVerified = true;
+            
+            // Calculate team assignment (needed for clue cycling)
+            CalculateTeamAssignment();
+            
+            // Override clue index with session data (convert from 1-based to 0-based)
+            clueIndex = Mathf.Max(0, sessionData.currentClueNumber - 1);
+            
+            // Set collected treasures count from session
+            cluesFound = sessionData.cluesCompleted;
+            
+            Debug.Log($"ResumeFromSession: cluesFound set to {cluesFound}, clueIndex set to {clueIndex} from session data");
+            
+            // Restore inventory visual states (assume sequential collection)
+            if (inventoryManager != null)
+            {
+                // Create array of collected clue indices (0-based)
+                int[] collectedClues = new int[cluesFound];
+                int teamStartIndex = (teamNumber - 1) % totalClues;
+                
+                for (int i = 0; i < cluesFound; i++)
+                {
+                    collectedClues[i] = (teamStartIndex + i) % totalClues;
+                }
+                
+                inventoryManager.RestoreFromProgress(collectedClues);
+            }
+            
+            // Show brief resuming message
+            ShowResumingMessage();
+            
+            // Wait briefly then go to clue panel for next treasure
+            StartCoroutine(ResumeToCluePanel());
+            
+            Debug.Log($"Resuming game: Team {teamNumber}, {sessionData.cluesCompleted} clues completed, current clue: {sessionData.currentClueNumber}");
+            if (mobileDebugText != null) mobileDebugText.text = $"Resuming: {sessionData.cluesCompleted} clues completed, current clue: {sessionData.currentClueNumber}";
         }
         catch (System.Exception e)
         {
-            Debug.LogError($"Error in OnTeamDataFetchFailed: {e.Message}");
+            Debug.LogError($"Error in ResumeFromSession: {e.Message}");
+            if (mobileDebugText != null) mobileDebugText.text = $"ERROR resuming game: {e.Message}";
+            
+            // Fallback to normal verification flow
+            ShowTeamVerificationPanel();
         }
     }
+    
+    private void ShowResumingMessage()
+    {
+        // Show a brief "Resuming..." message using the team verification panel
+        if (teamVerificationPanel != null)
+        {
+            teamVerificationPanel.SetActive(true);
+            
+            // Use the existing team verification text fields to show resuming message
+            if (teamDetailsText != null)
+            {
+                teamDetailsText.text = "Resuming your treasure hunt...";
+            }
+            if (teamMembersText != null)
+            {
+                teamMembersText.text = "Please wait while we restore your progress.";
+            }
+            if (teamNumberDisplayText != null)
+            {
+                teamNumberDisplayText.text = "Loading saved data...";
+            }
+        }
+        
+        // Hide all other panels
+        registrationPanel.SetActive(false);
+        timerPanel.SetActive(false);
+        cluePanel.SetActive(false);
+        if (arScanPanel != null) arScanPanel.SetActive(false);
+    }
+    
+    private IEnumerator ResumeToCluePanel()
+    {
+        // Wait 2 seconds to show the resuming message
+        yield return new WaitForSeconds(2f);
+        
+        // Check if game is complete (all clues found)
+        if (cluesFound >= totalClues)
+        {
+            // Show completion screen
+            ShowGameCompletePanel();
+        }
+        else
+        {
+            // Resume to clue panel for next treasure
+            ShowCluePanel();
+        }
+    }
+    
+    private void ShowGameCompletePanel()
+    {
+        // Show congratulations panel with completion message
+        congratsPanel.SetActive(true);
+        congratsMessage.text = "🎉 Congrats on completing the Treasure Hunt!\n\nYou have found all treasures!";
+        
+        // Hide next button since game is complete
+        if (nextTreasureButton != null)
+            nextTreasureButton.gameObject.SetActive(false);
+        
+        // Hide physical game elements
+        if (physicalGameText != null)
+            physicalGameText.gameObject.SetActive(false);
+        HidePhysicalGameVerificationUI();
+        
+        // Hide all other panels
+        registrationPanel.SetActive(false);
+        timerPanel.SetActive(false);
+        cluePanel.SetActive(false);
+        if (teamVerificationPanel != null) teamVerificationPanel.SetActive(false);
+        if (arScanPanel != null) arScanPanel.SetActive(false);
+        
+        Debug.Log("Game complete - showing completion screen");
+        if (mobileDebugText != null) mobileDebugText.text = "Game complete - all treasures found!";
+    }
+
+    // OnTeamDataFetchFailed method removed - now handled by FirebaseRTDBFetcher
 
     public void OnVerifyTeam()
     {
@@ -369,6 +400,8 @@ public class TreasureHuntManager : MonoBehaviour
         // Now calculate team assignment using Firebase team number
         CalculateTeamAssignment();
 
+        // No progress initialization needed - session tracking will handle it
+
         if (delayMinutes > 0)
         {
             ShowTimerPanel();
@@ -386,7 +419,7 @@ public class TreasureHuntManager : MonoBehaviour
         // Calculate wave, clue index, and delay using dynamic total clues count
         wave = (teamNumber - 1) / totalClues;
         clueIndex = (teamNumber - 1) % totalClues; // 0-based index for array access
-        delayMinutes = wave * 5;
+        delayMinutes = wave * 1;
 
         string teamInfo = currentTeamData != null ? $"{currentTeamData.teamName} (#{teamNumber})" : $"Team {teamNumber}";
         Debug.Log($"{teamInfo}: Wave {wave}, Clue Index {clueIndex + 1}, Delay {delayMinutes} minutes");
@@ -793,6 +826,8 @@ public class TreasureHuntManager : MonoBehaviour
         }
 
         cluesFound++;
+        
+        // Progress tracking now handled by session sync in FirebaseRTDBFetcher
 
         // Add main score on collection
         if (rtdbFetcher != null && scorePerTreasure > 0)
@@ -806,48 +841,66 @@ public class TreasureHuntManager : MonoBehaviour
         int remaining = GetRemainingClues();
         TreasureLocation currentTreasure = GetCurrentTreasureLocation();
 
-        if (remaining <= 0)
+        // Check if this treasure has a physical game (regardless of whether it's the last one)
+        if (currentTreasure != null && currentTreasure.hasPhysicalGame)
         {
-            // Final clue found → show completion message
-            congratsMessage.text = "🎉 Congrats on completing the Treasure Hunt!";
-            nextTreasureButton.gameObject.SetActive(false); // Hide next button
-
-            // Hide physical game elements for final completion
+            // Reset physical game completion status for new clue
+            isPhysicalGameCompleted = false;
+            
+            // Show physical game instructions
             if (physicalGameText != null)
-                physicalGameText.gameObject.SetActive(false);
-            HidePhysicalGameVerificationUI();
-        }
-        else
-        {
-            // Normal treasure found → show remaining count
-            congratsMessage.text = $"Congrats on finding the treasure!\n" +
-                           $"{remaining} clue{(remaining > 1 ? "s" : "")} remaining.";
-
-            // Handle physical game logic
-            if (currentTreasure != null && currentTreasure.hasPhysicalGame)
             {
-                // Reset physical game completion status for new clue
-                isPhysicalGameCompleted = false;
+                physicalGameText.gameObject.SetActive(true);
+                physicalGameText.text = currentTreasure.physicalGameInstruction;
+            }
+            
+            // Show verification UI and hide Next button initially
+            ShowPhysicalGameVerificationUI();
+            
+            if (remaining <= 0)
+            {
+                // Last clue with physical game → show appropriate message
+                congratsMessage.text = "🎉 Final treasure found!\nComplete the physical game to finish the hunt!";
                 
-                // Show physical game instructions
-                if (physicalGameText != null)
-                {
-                    physicalGameText.gameObject.SetActive(true);
-                    physicalGameText.text = currentTreasure.physicalGameInstruction;
-                }
-                
-                // Show verification UI and hide Next button initially
-                ShowPhysicalGameVerificationUI();
+                // Hide Next button - completion will happen after physical game
                 if (nextTreasureButton != null)
                     nextTreasureButton.gameObject.SetActive(false);
-                
-                // Clear any previous status messages
-                if (physicalGameStatusText != null)
-                    physicalGameStatusText.text = "Complete the physical game and get the verification code from the volunteer.";
             }
             else
             {
-                // No physical game - show Next button immediately
+                // Normal treasure with physical game → show remaining count
+                congratsMessage.text = $"Congrats on finding the treasure!\n" +
+                               $"{remaining} clue{(remaining > 1 ? "s" : "")} remaining.";
+                
+                // Hide Next button until physical game is completed
+                if (nextTreasureButton != null)
+                    nextTreasureButton.gameObject.SetActive(false);
+            }
+            
+            // Clear any previous status messages
+            if (physicalGameStatusText != null)
+                physicalGameStatusText.text = "Complete the physical game and get the verification code from the volunteer.";
+        }
+        else
+        {
+            // No physical game for this treasure
+            if (remaining <= 0)
+            {
+                // Final clue without physical game → immediate completion
+                congratsMessage.text = "🎉 Congrats on completing the Treasure Hunt!";
+                nextTreasureButton.gameObject.SetActive(false); // Hide next button
+
+                // Hide physical game elements for final completion
+                if (physicalGameText != null)
+                    physicalGameText.gameObject.SetActive(false);
+                HidePhysicalGameVerificationUI();
+            }
+            else
+            {
+                // Normal treasure without physical game → show Next button immediately
+                congratsMessage.text = $"Congrats on finding the treasure!\n" +
+                               $"{remaining} clue{(remaining > 1 ? "s" : "")} remaining.";
+                
                 nextTreasureButton.gameObject.SetActive(true);
                 
                 if (physicalGameText != null)
@@ -925,16 +978,34 @@ public class TreasureHuntManager : MonoBehaviour
             
             if (physicalGameStatusText != null)
                 physicalGameStatusText.text = "✓ Physical game verified! You can now proceed.";
+            
+            // Check if this is the final clue
+            int remaining = GetRemainingClues();
+            
+            if (remaining <= 0)
+            {
+                // Final clue completed with physical game → show final completion
+                congratsMessage.text = "🎉 Congrats on completing the Treasure Hunt!\n\nAll treasures found and physical game completed!";
                 
-            // Show the Next Treasure button
-            if (nextTreasureButton != null)
-                nextTreasureButton.gameObject.SetActive(true);
-                
-            // Hide the verification UI
-            if (physicalGameCodeInput != null)
-                physicalGameCodeInput.gameObject.SetActive(false);
-            if (verifyPhysicalGameButton != null)
-                verifyPhysicalGameButton.gameObject.SetActive(false);
+                // Hide Next button and physical game UI for final completion
+                if (nextTreasureButton != null)
+                    nextTreasureButton.gameObject.SetActive(false);
+                if (physicalGameText != null)
+                    physicalGameText.gameObject.SetActive(false);
+                HidePhysicalGameVerificationUI();
+            }
+            else
+            {
+                // Regular clue with physical game → show Next Treasure button
+                if (nextTreasureButton != null)
+                    nextTreasureButton.gameObject.SetActive(true);
+                    
+                // Hide the verification UI
+                if (physicalGameCodeInput != null)
+                    physicalGameCodeInput.gameObject.SetActive(false);
+                if (verifyPhysicalGameButton != null)
+                    verifyPhysicalGameButton.gameObject.SetActive(false);
+            }
                 
             // Update RTDB with physical game completion if available (no score - handled by web interface)
             if (rtdbFetcher != null)
@@ -1013,9 +1084,7 @@ public class TreasureHuntManager : MonoBehaviour
 
     void OnDestroy()
     {
-        // Cleanup Firebase event listeners
-        FirebaseFetcher.OnTeamDataFetched -= OnTeamDataReceived;
-        FirebaseFetcher.OnTeamDataFetchFailed -= OnTeamDataFetchFailed;
+        // No cleanup needed - FirebaseRTDBFetcher handles its own events
     }
 
 

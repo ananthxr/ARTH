@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.XR.ARFoundation;
@@ -27,6 +28,7 @@ public class ClueARImageManager : MonoBehaviour
     [Header("AR Components")]
     public ARTrackedImageManager trackedImageManager;
     public TreasureHuntManager treasureHuntManager;
+    public ProgressManager progressManager;
     
     [Header("Clue AR Data")]
     public ClueARData[] clueARData;
@@ -65,8 +67,16 @@ public class ClueARImageManager : MonoBehaviour
             if (mobileDebugText != null) mobileDebugText.text = "ERROR: TreasureHuntManager not assigned!";
         }
         
+        if (progressManager == null)
+        {
+            progressManager = FindObjectOfType<ProgressManager>();
+        }
+        
         // Pre-instantiate all AR objects
         SetupARObjects();
+        
+        // Load progress data if available (will be called after progress manager initializes)
+        StartCoroutine(LoadProgressDataDelayed());
     }
     
     void Update()
@@ -159,10 +169,13 @@ public class ClueARImageManager : MonoBehaviour
     {
         currentActiveClueIndex = clueIndex;
         
+        // Ensure we have latest progress data when setting active clue
+        LoadProgressData();
+        
         if (debugMode)
         {
-            Debug.Log($"Active clue set to index {clueIndex}");
-            if (mobileDebugText != null) mobileDebugText.text = $"Active clue set to index {clueIndex}";
+            Debug.Log($"Active clue set to index {clueIndex}, {collectedClueIndices.Count} treasures already collected");
+            if (mobileDebugText != null) mobileDebugText.text = $"Active clue set to index {clueIndex}, {collectedClueIndices.Count} collected";
         }
         
         // Clear any existing AR objects
@@ -402,6 +415,46 @@ public class ClueARImageManager : MonoBehaviour
         {
             Debug.Log($"Treasure for clue {clueIndex} marked as collected - will not respawn");
             if (mobileDebugText != null) mobileDebugText.text = $"Treasure for clue {clueIndex} marked as collected - will not respawn";
+        }
+    }
+    
+    // Load progress data with slight delay to ensure ProgressManager is ready
+    private IEnumerator LoadProgressDataDelayed()
+    {
+        // Wait a frame to ensure all managers are initialized
+        yield return new WaitForEndOfFrame();
+        
+        LoadProgressData();
+    }
+    
+    // Load collected treasures from ProgressManager
+    public void LoadProgressData()
+    {
+        if (progressManager != null && progressManager.HasProgress())
+        {
+            int[] collectedTreasures = progressManager.GetCollectedTreasures();
+            
+            // Clear existing and load from progress
+            collectedClueIndices.Clear();
+            
+            foreach (int clueIndex in collectedTreasures)
+            {
+                collectedClueIndices.Add(clueIndex);
+            }
+            
+            if (debugMode)
+            {
+                Debug.Log($"Loaded progress: {collectedClueIndices.Count} treasures already collected");
+                if (mobileDebugText != null) mobileDebugText.text = $"Progress loaded: {collectedClueIndices.Count} treasures collected";
+            }
+        }
+        else
+        {
+            if (debugMode)
+            {
+                Debug.Log("No progress data to load - starting fresh");
+                if (mobileDebugText != null) mobileDebugText.text = "No progress data - starting fresh";
+            }
         }
     }
 }

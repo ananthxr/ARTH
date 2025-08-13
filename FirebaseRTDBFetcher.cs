@@ -19,6 +19,16 @@ public class TeamDataRTDB
     public int score;
 }
 
+[System.Serializable]
+public class SessionData
+{
+    public bool started;
+    public int currentClueNumber;
+    public int cluesCompleted;
+    public bool physicalGamePlayed;
+    public int physicalGameScore;
+}
+
 public class FirebaseRTDBFetcher : MonoBehaviour
 {
     [Header("Realtime Database Settings")]
@@ -41,6 +51,7 @@ public class FirebaseRTDBFetcher : MonoBehaviour
     public TMP_Text verificationText;
     public Button iVerifiedButton;
     public TreasureHuntManager treasureHuntManager;
+    public ProgressManager progressManager;
 
     [Header("Scoring (Main Score)")]
     [Tooltip("Enable to update the team's main score in RTDB when a treasure is collected (based on progress)")]
@@ -60,9 +71,19 @@ public class FirebaseRTDBFetcher : MonoBehaviour
     [Tooltip("Enable volunteer-controlled game start/stop system")]
     public bool enableGameControl = true;
     [Tooltip("How often to check volunteer node for game control (seconds)")]
-    public float volunteerCheckInterval = 3f;
+    public float volunteerCheckInterval = 6f;
+    [Tooltip("Number of consecutive failures before showing Mayday panel")]
+    public int maxConsecutiveFailures = 3;
+    [Tooltip("Grace period in seconds before showing Mayday panel after failures")]
+    public float maydayGracePeriod = 15f;
+    [Tooltip("Maximum retry attempts for volunteer status checks")]
+    public int maxRetryAttempts = 3;
+    [Tooltip("Base delay in seconds for exponential backoff (doubles each retry)")]
+    public float baseRetryDelay = 1f;
     [Tooltip("Full-screen Mayday panel that blocks all gameplay")]
     public GameObject maydayPanel;
+    [Tooltip("Text component in Mayday panel to show different messages")]
+    public TMP_Text maydayMessageText;
     
     [Header("AR Session Integration")]
     [Tooltip("Wait for AR Session to be tracking before making any network calls")]
@@ -78,6 +99,11 @@ public class FirebaseRTDBFetcher : MonoBehaviour
         if (treasureHuntManager == null)
         {
             treasureHuntManager = FindObjectOfType<TreasureHuntManager>();
+        }
+        
+        if (progressManager == null)
+        {
+            progressManager = FindObjectOfType<ProgressManager>();
         }
         
         // Find AR Session if not assigned
@@ -128,16 +154,25 @@ public class FirebaseRTDBFetcher : MonoBehaviour
         
         yield return StartCoroutine(CheckVolunteerGameStatus());
         
-        if (_gameAllowed)
+        // Only proceed if we successfully checked status (no network issues)
+        if (_consecutiveFailures == 0)
         {
-            // Game is allowed - proceed with team data fetch
-            if (outputText != null) outputText.text = $"Fetching UID: {uid}...";
-            yield return StartCoroutine(GetTeamData(uid));
+            if (_gameAllowed)
+            {
+                // Game is allowed - proceed with team data fetch
+                if (outputText != null) outputText.text = $"Fetching UID: {uid}...";
+                yield return StartCoroutine(GetTeamData(uid));
+            }
+            else
+            {
+                // Game legitimately not started by volunteer - show message
+                if (uidStatusText != null) uidStatusText.text = "The game has not started yet. Please wait for further instructions.";
+            }
         }
         else
         {
-            // Game not started - show message and don't fetch team data
-            if (uidStatusText != null) uidStatusText.text = "The game has not started yet. Please wait for further instructions.";
+            // Network issues during initial check - show appropriate message
+            if (uidStatusText != null) uidStatusText.text = "Network connectivity issues. Please check your internet connection and try again.";
         }
     }
 
@@ -258,11 +293,21 @@ public class FirebaseRTDBFetcher : MonoBehaviour
 
                 // Remember active UID for session sync
                 _activeUid = uidInput != null ? (uidInput.text ?? string.Empty).Trim() : string.Empty;
+                
+                // Check existing session data for progress restoration
+                if (!string.IsNullOrEmpty(_activeUid))
+                {
+                    StartCoroutine(CheckSessionProgress(_activeUid));
+                }
+                else
+                {
+                    // Continue with normal verification flow
+                    ContinueWithNormalFlow();
+                }
+                
                 if (enableSessionSync && !string.IsNullOrEmpty(_activeUid))
                 {
-                    // Initialize session as not started (already AR session ready if we reach here)
-                    StartCoroutine(PatchSessionField(_activeUid, "started", false));
-                    // Start polling loop
+                    // Don't reset existing session data - just start polling loop
                     RestartSessionSyncLoop();
                 }
             }
@@ -285,6 +330,9 @@ public class FirebaseRTDBFetcher : MonoBehaviour
     private Coroutine _volunteerMonitorRoutine;
     private bool _gameAllowed = false;
     private bool _lastGameState = false;
+    private int _consecutiveFailures = 0;
+    private bool _isInGracePeriod = false;
+    private Coroutine _gracePeriodRoutine;
     
     // AR Session tracking
     private bool _arSessionReady = false;
@@ -329,6 +377,156 @@ public class FirebaseRTDBFetcher : MonoBehaviour
             verificationPanel.SetActive(false);
         }
     }
+    
+    // Check session data for existing progress
+    private IEnumerator CheckSessionProgress(string uid)
+    {
+        string url = BuildUrl(uid + "/session");
+        
+        using (var request = UnityWebRequest.Get(url))
+        {
+            request.timeout = 10;
+            yield return request.SendWebRequest();
+            
+            if (request.result == UnityWebRequest.Result.Success)
+            {
+                string json = request.downloadHandler.text;
+                
+                if (!string.IsNullOrWhiteSpace(json) && json != "null")
+                {
+                    try
+                    {
+                        var sessionData = JsonUtility.FromJson<SessionData>(json);
+                        
+                        // Check if user has meaningful progress (has completed clues)
+                        if (sessionData != null && sessionData.cluesCompleted > 0)
+                        {
+                            Debug.Log($"Existing session found: {sessionData.cluesCompleted} clues completed, current clue: {sessionData.currentClueNumber}");
+                            
+                            // Resume from session data
+                            ResumeFromSession(sessionData);
+                            yield break;
+                        }
+                    }
+                    catch (System.Exception e)
+                    {
+                        Debug.LogWarning($"Failed to parse session data: {e.Message}");
+                    }
+                }
+            }
+            
+            // No meaningful session data - continue with normal flow
+            Debug.Log("No existing session data found - starting new game");
+            ContinueWithNormalFlow();
+        }
+    }
+    
+    private void ResumeFromSession(SessionData sessionData)
+    {
+        if (treasureHuntManager != null && _lastFetched != null)
+        {
+            // Disable the "I Verified" button to prevent accidental clicks during resume
+            if (iVerifiedButton != null)
+            {
+                iVerifiedButton.interactable = false;
+            }
+            
+            var team = new TeamData
+            {
+                teamNumber = _lastFetched.teamNumber,
+                uid = _lastFetched.uid,
+                teamName = _lastFetched.teamName,
+                player1 = _lastFetched.player1,
+                player2 = _lastFetched.player2,
+                email = _lastFetched.email,
+                score = _lastFetched.score
+            };
+            
+            // Hide verification panel before resuming game
+            if (verificationPanel != null)
+            {
+                verificationPanel.SetActive(false);
+            }
+            
+            // Resume game with session data
+            treasureHuntManager.ResumeFromSession(team, sessionData);
+            
+            // Start continuous monitoring once game begins
+            if (enableGameControl)
+                StartVolunteerMonitoring();
+        }
+        else
+        {
+            Debug.LogError("Cannot resume game: TreasureHuntManager or team data missing");
+            ContinueWithNormalFlow();
+        }
+    }
+    
+    private IEnumerator InitializeSessionTracking()
+    {
+        if (string.IsNullOrEmpty(_activeUid)) yield break;
+        
+        string url = BuildUrl(_activeUid + "/session");
+        
+        using (var request = UnityWebRequest.Get(url))
+        {
+            request.timeout = 10;
+            yield return request.SendWebRequest();
+            
+            if (request.result == UnityWebRequest.Result.Success)
+            {
+                string json = request.downloadHandler.text;
+                
+                if (!string.IsNullOrWhiteSpace(json) && json != "null")
+                {
+                    try
+                    {
+                        var sessionData = JsonUtility.FromJson<SessionData>(json);
+                        if (sessionData != null)
+                        {
+                            // Initialize tracking variables from existing session data
+                            _lastSentStarted = sessionData.started;
+                            _lastSentCurrentClue = sessionData.currentClueNumber;
+                            _lastSentCompleted = sessionData.cluesCompleted;
+                            
+                            Debug.Log($"Initialized session tracking from existing data: started={_lastSentStarted}, clue={_lastSentCurrentClue}, completed={_lastSentCompleted}");
+                        }
+                    }
+                    catch (System.Exception e)
+                    {
+                        Debug.LogWarning($"Failed to parse existing session data for tracking: {e.Message}");
+                    }
+                }
+            }
+        }
+    }
+    
+    private void ContinueWithNormalFlow()
+    {
+        // Show normal team verification panel for new game
+        if (verificationPanel != null && _lastFetched != null)
+        {
+            verificationPanel.SetActive(true);
+            
+            if (verificationText != null)
+            {
+                verificationText.text =
+                    $"Team Details:\n\n" +
+                    $"Team Name: {_lastFetched.teamName}\n" +
+                    $"Team Number: {_lastFetched.teamNumber}\n" +
+                    $"Players: {_lastFetched.player1} & {_lastFetched.player2}\n" +
+                    $"Email: {_lastFetched.email}\n" +
+                    $"UID: {_lastFetched.uid}\n\n" +
+                    $"Please verify this information is correct.";
+            }
+            
+            // Hide registration panel
+            if (treasureHuntManager != null && treasureHuntManager.registrationPanel != null)
+            {
+                treasureHuntManager.registrationPanel.SetActive(false);
+            }
+        }
+    }
 
     private void RestartSessionSyncLoop()
     {
@@ -342,9 +540,15 @@ public class FirebaseRTDBFetcher : MonoBehaviour
 
     private IEnumerator SessionSyncLoop()
     {
+        // Initialize tracking variables from current session state (if exists)
+        // This prevents overwriting existing session data
         _lastSentStarted = false;
         _lastSentCurrentClue = -1;
         _lastSentCompleted = -1;
+        
+        // First, get current session data to avoid overwriting it
+        yield return StartCoroutine(InitializeSessionTracking());
+        
         var wait = new WaitForSeconds(sessionSyncIntervalSeconds);
         while (enableSessionSync && !string.IsNullOrEmpty(_activeUid))
         {
@@ -356,9 +560,11 @@ public class FirebaseRTDBFetcher : MonoBehaviour
             {
                 started = treasureHuntManager.IsGPSTrackingActive();
                 currentClue = Mathf.Max(0, treasureHuntManager.GetClueIndex()); // 1-based per manager
-                int total = treasureHuntManager.GetTotalClues();
-                int remaining = treasureHuntManager.GetRemainingClues();
-                completed = Mathf.Clamp(total - remaining, 0, total);
+                
+                // Get completed count directly from TreasureHuntManager
+                int totalClues = treasureHuntManager.GetTotalClues();
+                int remainingClues = treasureHuntManager.GetRemainingClues();
+                completed = Mathf.Clamp(totalClues - remainingClues, 0, totalClues);
             }
 
             // Batch PATCH of changed fields
@@ -516,32 +722,67 @@ public class FirebaseRTDBFetcher : MonoBehaviour
         {
             StopCoroutine(_volunteerMonitorRoutine);
         }
+        if (_gracePeriodRoutine != null)
+        {
+            StopCoroutine(_gracePeriodRoutine);
+        }
     }
 
     // ---------------- Volunteer Game Control System ----------------
     
     private IEnumerator CheckVolunteerGameStatus()
     {
-        string url = BuildUrl("volunteer/start");
+        bool success = false;
         
-        using (var request = UnityWebRequest.Get(url))
+        for (int attempt = 1; attempt <= maxRetryAttempts; attempt++)
         {
-            request.timeout = 10;
-            yield return request.SendWebRequest();
+            string url = BuildUrl("volunteer/start");
             
-            if (request.result == UnityWebRequest.Result.Success)
+            using (var request = UnityWebRequest.Get(url))
             {
-                string response = request.downloadHandler.text;
-                // Response will be "true", "false", or "null"
-                _gameAllowed = response.Trim().ToLower() == "true";
+                request.timeout = 10;
+                yield return request.SendWebRequest();
                 
-                Debug.Log($"Volunteer game status: {(_gameAllowed ? "ALLOWED" : "NOT ALLOWED")}");
+                if (request.result == UnityWebRequest.Result.Success)
+                {
+                    string response = request.downloadHandler.text;
+                    // Response will be "true", "false", or "null"
+                    bool currentGameState = response.Trim().ToLower() == "true";
+                    
+                    // Success - reset failure counter and update state
+                    _consecutiveFailures = 0;
+                    _gameAllowed = currentGameState;
+                    success = true;
+                    
+                    Debug.Log($"Volunteer game status (attempt {attempt}): {(_gameAllowed ? "ALLOWED" : "NOT ALLOWED")}");
+                    break;
+                }
+                else
+                {
+                    LogError($"Failed to check volunteer status (attempt {attempt}/{maxRetryAttempts}): {request.error}");
+                    
+                    // If this isn't the last attempt, wait with exponential backoff
+                    if (attempt < maxRetryAttempts)
+                    {
+                        float delay = baseRetryDelay * Mathf.Pow(2, attempt - 1);
+                        Debug.Log($"Retrying volunteer status check in {delay} seconds...");
+                        yield return new WaitForSeconds(delay);
+                    }
+                }
             }
-            else
+        }
+        
+        if (!success)
+        {
+            // All retry attempts failed - increment consecutive failures
+            _consecutiveFailures++;
+            Debug.LogWarning($"All volunteer status check attempts failed. Consecutive failures: {_consecutiveFailures}/{maxConsecutiveFailures}");
+            
+            // Only change game state if we've exceeded the failure threshold
+            if (_consecutiveFailures >= maxConsecutiveFailures)
             {
-                // If can't reach volunteer node, default to not allowed for safety
-                _gameAllowed = false;
-                LogError($"Failed to check volunteer status: {request.error}");
+                // Don't immediately set _gameAllowed = false, let the grace period handle it
+                Debug.LogWarning("Maximum consecutive failures reached. Network issues detected.");
             }
         }
     }
@@ -567,36 +808,92 @@ public class FirebaseRTDBFetcher : MonoBehaviour
         {
             yield return StartCoroutine(CheckVolunteerGameStatus());
             
-            // Check if game state changed
-            if (_gameAllowed != _lastGameState)
+            // Check if game state changed (only if we have recent successful checks)
+            if (_consecutiveFailures == 0 && _gameAllowed != _lastGameState)
             {
                 if (!_gameAllowed)
                 {
-                    // Game was stopped - show Mayday panel
-                    ShowMaydayPanel();
+                    // Game was legitimately stopped by volunteer - show Mayday panel immediately
+                    ShowMaydayPanel("The game has been paused by the volunteer coordinator.");
                     Debug.Log("GAME STOPPED BY VOLUNTEER - Mayday panel activated");
+                    
+                    // Cancel any ongoing grace period
+                    if (_gracePeriodRoutine != null)
+                    {
+                        StopCoroutine(_gracePeriodRoutine);
+                        _gracePeriodRoutine = null;
+                        _isInGracePeriod = false;
+                    }
                 }
                 else
                 {
                     // Game was re-enabled - hide Mayday panel
                     HideMaydayPanel();
                     Debug.Log("GAME RE-ENABLED BY VOLUNTEER - Mayday panel hidden");
+                    
+                    // Cancel any ongoing grace period
+                    if (_gracePeriodRoutine != null)
+                    {
+                        StopCoroutine(_gracePeriodRoutine);
+                        _gracePeriodRoutine = null;
+                        _isInGracePeriod = false;
+                    }
                 }
                 
                 _lastGameState = _gameAllowed;
+            }
+            // Handle network failures with grace period
+            else if (_consecutiveFailures >= maxConsecutiveFailures && !_isInGracePeriod)
+            {
+                // Start grace period before showing Mayday panel for network issues
+                _isInGracePeriod = true;
+                _gracePeriodRoutine = StartCoroutine(HandleNetworkGracePeriod());
+            }
+            // If we recover during grace period, cancel it
+            else if (_consecutiveFailures == 0 && _isInGracePeriod)
+            {
+                Debug.Log("Network recovered during grace period - canceling Mayday panel");
+                if (_gracePeriodRoutine != null)
+                {
+                    StopCoroutine(_gracePeriodRoutine);
+                    _gracePeriodRoutine = null;
+                }
+                _isInGracePeriod = false;
             }
             
             yield return wait;
         }
     }
     
-    private void ShowMaydayPanel()
+    private IEnumerator HandleNetworkGracePeriod()
+    {
+        Debug.Log($"Starting {maydayGracePeriod}s grace period for network issues...");
+        yield return new WaitForSeconds(maydayGracePeriod);
+        
+        // After grace period, check if we still have network issues
+        if (_consecutiveFailures >= maxConsecutiveFailures && _isInGracePeriod)
+        {
+            ShowMaydayPanel("Network connectivity issues detected. Please check your internet connection and wait for reconnection.");
+            Debug.Log("NETWORK ISSUES DETECTED - Mayday panel activated after grace period");
+        }
+        
+        _isInGracePeriod = false;
+        _gracePeriodRoutine = null;
+    }
+    
+    private void ShowMaydayPanel(string message = "The game has been paused. Please wait for further instructions.")
     {
         if (maydayPanel != null)
         {
             maydayPanel.SetActive(true);
             // Mayday panel should be highest priority UI element
             maydayPanel.transform.SetAsLastSibling();
+            
+            // Update message if text component is assigned
+            if (maydayMessageText != null)
+            {
+                maydayMessageText.text = message;
+            }
         }
         
         // Pause all game activities by disabling treasure hunt manager
