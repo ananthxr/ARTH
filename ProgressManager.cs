@@ -15,6 +15,8 @@ public class ProgressData
     public int nextClueIndex = 0;               // Next clue to hunt (0-based)
     public int teamAssignedClueIndex = 0;       // Original starting clue for this team
     public string lastSavedTimestamp;           // When progress was last saved
+    public bool physicalGameActive = false;     // True when physical game is pending completion
+    public int physicalGameClueIndex = -1;      // Which clue's physical game is active
     
     public ProgressData()
     {
@@ -343,5 +345,55 @@ public class ProgressManager : MonoBehaviour
             Debug.Log($"ProgressManager active UID set to: {uid}");
             if (mobileDebugText != null) mobileDebugText.text = $"Progress UID set: {uid}";
         }
+    }
+    
+    // Activate physical game tracking (called when physical game panel is shown)
+    public void SetPhysicalGameActive(int clueIndex)
+    {
+        if (currentProgress == null) return;
+        
+        currentProgress.physicalGameActive = true;
+        currentProgress.physicalGameClueIndex = clueIndex;
+        currentProgress.lastSavedTimestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
+        
+        // Save immediately to Firebase
+        StartCoroutine(SaveProgressToFirebase());
+        
+        if (debugMode)
+        {
+            Debug.Log($"Physical game activated for clue {clueIndex}");
+            if (mobileDebugText != null) mobileDebugText.text = $"Physical game active: clue {clueIndex}";
+        }
+    }
+    
+    // Clear physical game tracking (called when physical game is completed)
+    public void ClearPhysicalGameActive()
+    {
+        if (currentProgress == null) return;
+        
+        currentProgress.physicalGameActive = false;
+        currentProgress.physicalGameClueIndex = -1;
+        currentProgress.lastSavedTimestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
+        
+        // Save immediately to Firebase
+        StartCoroutine(SaveProgressToFirebase());
+        
+        if (debugMode)
+        {
+            Debug.Log("Physical game completed and cleared");
+            if (mobileDebugText != null) mobileDebugText.text = "Physical game completed";
+        }
+    }
+    
+    // Check if physical game is active
+    public bool IsPhysicalGameActive()
+    {
+        return currentProgress != null && currentProgress.physicalGameActive;
+    }
+    
+    // Get active physical game clue index
+    public int GetPhysicalGameClueIndex()
+    {
+        return currentProgress?.physicalGameClueIndex ?? -1;
     }
 }

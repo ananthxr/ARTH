@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
@@ -124,10 +125,38 @@ public class TreasureHuntManager : MonoBehaviour
     private bool isPhysicalGameCompleted = false;
 
     private int cluesFound = 0;
+    
+    // Enhanced tracking for duplicate protection
+    private HashSet<int> completedClueIndices = new HashSet<int>(); // Track fully completed clues (including physical games)
 
     public int GetRemainingClues()
     {
         return totalClues - cluesFound;
+    }
+    
+    // Check if a specific clue has been fully completed (including physical game if required)
+    public bool IsClueCompleted(int clueIndexToCheck)
+    {
+        return completedClueIndices.Contains(clueIndexToCheck);
+    }
+    
+    // Mark a clue as fully completed (called after physical game completion or immediate completion)
+    private void MarkClueCompleted(int clueIndexToMark)
+    {
+        if (!completedClueIndices.Contains(clueIndexToMark))
+        {
+            completedClueIndices.Add(clueIndexToMark);
+            
+            // Update session data with completed clues array
+            if (rtdbFetcher != null)
+            {
+                int[] completedArray = new int[completedClueIndices.Count];
+                completedClueIndices.CopyTo(completedArray);
+                rtdbFetcher.UpdateSessionPhase("clue", false, completedArray);
+            }
+            
+            Debug.Log($"Clue {clueIndexToMark} marked as fully completed");
+        }
     }
     void Start()
     {
@@ -273,29 +302,64 @@ public class TreasureHuntManager : MonoBehaviour
             
             Debug.Log($"ResumeFromSession: cluesFound set to {cluesFound}, clueIndex set to {clueIndex} from session data");
             
-            // Restore inventory visual states (assume sequential collection)
+            // Restore inventory visual states - use completedClueIndices if available, otherwise assume sequential
             if (inventoryManager != null)
             {
-                // Create array of collected clue indices (0-based)
-                int[] collectedClues = new int[cluesFound];
-                int teamStartIndex = (teamNumber - 1) % totalClues;
+                int[] collectedClues;
                 
-                for (int i = 0; i < cluesFound; i++)
+                if (sessionData.completedClueIndices != null && sessionData.completedClueIndices.Length > 0)
                 {
-                    collectedClues[i] = (teamStartIndex + i) % totalClues;
+                    // Use actual completed clue indices from session data
+                    collectedClues = sessionData.completedClueIndices;
+                    Debug.Log($"Restoring inventory from session data: {collectedClues.Length} completed clues");
+                }
+                else
+                {
+                    // Fallback to sequential assumption for backward compatibility
+                    collectedClues = new int[cluesFound];
+                    int teamStartIndex = (teamNumber - 1) % totalClues;
+                    
+                    for (int i = 0; i < cluesFound; i++)
+                    {
+                        collectedClues[i] = (teamStartIndex + i) % totalClues;
+                    }
+                    Debug.Log($"Restoring inventory using sequential assumption: {collectedClues.Length} completed clues");
                 }
                 
                 inventoryManager.RestoreFromProgress(collectedClues);
+                
+                // Also restore completed clues tracking for duplicate protection
+                completedClueIndices.Clear();
+                foreach (int completedClue in collectedClues)
+                {
+                    completedClueIndices.Add(completedClue);
+                }
             }
             
-            // Show brief resuming message
-            ShowResumingMessage();
+            // Check if we need to resume to physical game instead of next clue
+            // Enhanced logic to use physicalGamePending for better detection
+            bool shouldResumeToPhysicalGame = sessionData.physicalGamePending && 
+                                              !sessionData.physicalGamePlayed;
             
-            // Wait briefly then go to clue panel for next treasure
-            StartCoroutine(ResumeToCluePanel());
-            
-            Debug.Log($"Resuming game: Team {teamNumber}, {sessionData.cluesCompleted} clues completed, current clue: {sessionData.currentClueNumber}");
-            if (mobileDebugText != null) mobileDebugText.text = $"Resuming: {sessionData.cluesCompleted} clues completed, current clue: {sessionData.currentClueNumber}";
+            if (shouldResumeToPhysicalGame)
+            {
+                Debug.Log($"Resuming to physical game for clue {clueIndex} (physicalGamePending detected)");
+                if (mobileDebugText != null) mobileDebugText.text = $"Resuming to physical game for clue {clueIndex + 1}";
+                
+                // Show brief resuming message then go directly to physical game
+                ShowResumingMessage();
+                StartCoroutine(ResumeToPhysicalGame());
+            }
+            else
+            {
+                // Normal resume flow
+                Debug.Log($"Resuming to next clue: Team {teamNumber}, {sessionData.cluesCompleted} clues completed, current clue: {sessionData.currentClueNumber}");
+                if (mobileDebugText != null) mobileDebugText.text = $"Resuming: {sessionData.cluesCompleted} clues completed, current clue: {sessionData.currentClueNumber}";
+                
+                // Show brief resuming message then go to clue panel for next treasure
+                ShowResumingMessage();
+                StartCoroutine(ResumeToCluePanel());
+            }
         }
         catch (System.Exception e)
         {
@@ -354,6 +418,60 @@ public class TreasureHuntManager : MonoBehaviour
         }
     }
     
+    private IEnumerator ResumeToPhysicalGame()
+    {
+        // Wait 2 seconds to show the resuming message
+        yield return new WaitForSeconds(2f);
+        
+        // Get current treasure to verify it has a physical game
+        TreasureLocation currentTreasure = GetCurrentTreasureLocation();
+        
+        if (currentTreasure != null && currentTreasure.hasPhysicalGame)
+        {
+            // Show congratulations panel with physical game
+            congratsPanel.SetActive(true);
+            
+            int remaining = GetRemainingClues();
+            
+            // Set appropriate message for resumed physical game
+            if (remaining <= 0)
+            {
+                congratsMessage.text = "🎉 Final treasure found!\nComplete the physical game to finish the hunt!";
+                if (nextTreasureButton != null)
+                    nextTreasureButton.gameObject.SetActive(false);
+            }
+            else
+            {
+                congratsMessage.text = $"Congrats on finding the treasure!\n{remaining} clue{(remaining > 1 ? "s" : "")} remaining.";
+                if (nextTreasureButton != null)
+                    nextTreasureButton.gameObject.SetActive(false); // Hidden until physical game complete
+            }
+            
+            // Show physical game instructions
+            if (physicalGameText != null)
+            {
+                physicalGameText.gameObject.SetActive(true);
+                physicalGameText.text = currentTreasure.physicalGameInstruction;
+            }
+            
+            // Show verification UI
+            ShowPhysicalGameVerificationUI();
+            
+            if (physicalGameStatusText != null)
+                physicalGameStatusText.text = "Complete the physical game and get the verification code from the volunteer.";
+                
+            Debug.Log($"Resumed to physical game for clue {clueIndex}");
+            if (mobileDebugText != null) 
+                mobileDebugText.text = $"Physical game resumed for clue {clueIndex + 1}";
+        }
+        else
+        {
+            // Fallback to normal clue panel if no physical game
+            Debug.LogWarning($"Tried to resume to physical game but clue {clueIndex} has no physical game");
+            ShowCluePanel();
+        }
+    }
+    
     private void ShowGameCompletePanel()
     {
         // Show congratulations panel with completion message
@@ -378,6 +496,171 @@ public class TreasureHuntManager : MonoBehaviour
         
         Debug.Log("Game complete - showing completion screen");
         if (mobileDebugText != null) mobileDebugText.text = "Game complete - all treasures found!";
+    }
+    
+    // NEW: Resume methods for ProgressData-based system
+    public void ResumeToPhysicalGame(TeamData teamData, ProgressData progressData)
+    {
+        try
+        {
+            if (teamData == null || progressData == null)
+            {
+                Debug.LogError("Cannot resume to physical game: missing team data or progress data");
+                if (mobileDebugText != null) mobileDebugText.text = "ERROR: Cannot resume to physical game - missing data";
+                return;
+            }
+            
+            // Set team data
+            currentTeamData = teamData;
+            teamNumber = teamData.teamNumber;
+            isTeamVerified = true;
+            
+            // Calculate team assignment (needed for clue cycling)
+            CalculateTeamAssignment();
+            
+            // Set clue index to the physical game clue
+            clueIndex = progressData.physicalGameClueIndex;
+            
+            // Set collected treasures count from progress
+            cluesFound = progressData.totalTreasuresCollected;
+            
+            Debug.Log($"ResumeToPhysicalGame: cluesFound set to {cluesFound}, clueIndex set to {clueIndex} for physical game");
+            if (mobileDebugText != null) mobileDebugText.text = $"Resuming physical game: clue {clueIndex + 1}";
+            
+            // Restore inventory visual states
+            if (inventoryManager != null)
+            {
+                inventoryManager.RestoreFromProgress(progressData.collectedTreasures);
+                
+                // Also restore completed clues tracking for duplicate protection
+                completedClueIndices.Clear();
+                foreach (int completedClue in progressData.collectedTreasures)
+                {
+                    completedClueIndices.Add(completedClue);
+                }
+            }
+            
+            // Show brief resuming message then go directly to physical game
+            ShowResumingMessage();
+            StartCoroutine(ResumeToPhysicalGamePanel());
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"Error in ResumeToPhysicalGame: {e.Message}");
+            if (mobileDebugText != null) mobileDebugText.text = $"ERROR resuming to physical game: {e.Message}";
+            
+            // Fallback to normal verification flow
+            ShowTeamVerificationPanel();
+        }
+    }
+    
+    public void ResumeFromProgress(TeamData teamData, ProgressData progressData)
+    {
+        try
+        {
+            if (teamData == null || progressData == null)
+            {
+                Debug.LogError("Cannot resume from progress: missing team data or progress data");
+                if (mobileDebugText != null) mobileDebugText.text = "ERROR: Cannot resume from progress - missing data";
+                return;
+            }
+            
+            // Set team data
+            currentTeamData = teamData;
+            teamNumber = teamData.teamNumber;
+            isTeamVerified = true;
+            
+            // Calculate team assignment (needed for clue cycling)
+            CalculateTeamAssignment();
+            
+            // Set clue index to next clue
+            clueIndex = progressData.nextClueIndex;
+            
+            // Set collected treasures count from progress
+            cluesFound = progressData.totalTreasuresCollected;
+            
+            Debug.Log($"ResumeFromProgress: cluesFound set to {cluesFound}, clueIndex set to {clueIndex} from progress data");
+            if (mobileDebugText != null) mobileDebugText.text = $"Resuming: {cluesFound} treasures found, next clue {clueIndex + 1}";
+            
+            // Restore inventory visual states
+            if (inventoryManager != null)
+            {
+                inventoryManager.RestoreFromProgress(progressData.collectedTreasures);
+                
+                // Also restore completed clues tracking for duplicate protection
+                completedClueIndices.Clear();
+                foreach (int completedClue in progressData.collectedTreasures)
+                {
+                    completedClueIndices.Add(completedClue);
+                }
+            }
+            
+            // Show brief resuming message then go to clue panel for next treasure
+            ShowResumingMessage();
+            StartCoroutine(ResumeToCluePanel());
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"Error in ResumeFromProgress: {e.Message}");
+            if (mobileDebugText != null) mobileDebugText.text = $"ERROR resuming from progress: {e.Message}";
+            
+            // Fallback to normal verification flow
+            ShowTeamVerificationPanel();
+        }
+    }
+    
+    private IEnumerator ResumeToPhysicalGamePanel()
+    {
+        // Wait 2 seconds to show the resuming message
+        yield return new WaitForSeconds(2f);
+        
+        // Get current treasure to verify it has a physical game
+        TreasureLocation currentTreasure = GetCurrentTreasureLocation();
+        
+        if (currentTreasure != null && currentTreasure.hasPhysicalGame)
+        {
+            // Show congratulations panel with physical game
+            congratsPanel.SetActive(true);
+            
+            int remaining = GetRemainingClues();
+            
+            // Set appropriate message for resumed physical game
+            if (remaining <= 0)
+            {
+                congratsMessage.text = "🎉 Final treasure found!\nComplete the physical game to finish the hunt!";
+                if (nextTreasureButton != null)
+                    nextTreasureButton.gameObject.SetActive(false);
+            }
+            else
+            {
+                congratsMessage.text = $"Congrats on finding the treasure!\n{remaining} clue{(remaining > 1 ? "s" : "")} remaining.";
+                if (nextTreasureButton != null)
+                    nextTreasureButton.gameObject.SetActive(false); // Hidden until physical game complete
+            }
+            
+            // Show physical game instructions
+            if (physicalGameText != null)
+            {
+                physicalGameText.gameObject.SetActive(true);
+                physicalGameText.text = currentTreasure.physicalGameInstruction;
+            }
+            
+            // Show verification UI
+            ShowPhysicalGameVerificationUI();
+            
+            if (physicalGameStatusText != null)
+                physicalGameStatusText.text = "Complete the physical game and get the verification code from the volunteer.";
+                
+            Debug.Log($"Resumed to physical game panel for clue {clueIndex}");
+            if (mobileDebugText != null) 
+                mobileDebugText.text = $"Physical game panel shown for clue {clueIndex + 1}";
+        }
+        else
+        {
+            // Fallback to normal clue panel if no physical game
+            Debug.LogWarning($"Tried to resume to physical game but clue {clueIndex} has no physical game");
+            ShowCluePanel();
+        }
     }
 
     // OnTeamDataFetchFailed method removed - now handled by FirebaseRTDBFetcher
@@ -825,21 +1108,54 @@ public class TreasureHuntManager : MonoBehaviour
             inventoryManager.AddCollectedTreasure(clueIndex);
         }
 
+        // Get current treasure to check for physical game
+        TreasureLocation currentTreasure = GetCurrentTreasureLocation();
+        bool hasPhysicalGame = currentTreasure != null && currentTreasure.hasPhysicalGame;
+        
+        // ALWAYS increment cluesFound and add score immediately when AR treasure is collected
+        // This treats "clue solved" (AR collection) as separate from "physical game completion"
         cluesFound++;
         
-        // Progress tracking now handled by session sync in FirebaseRTDBFetcher
-
-        // Add main score on collection
+        // Add main score on collection (for all clues)
         if (rtdbFetcher != null && scorePerTreasure > 0)
         {
+            Debug.Log($"Adding score {scorePerTreasure} for clue {clueIndex}");
+            if (mobileDebugText != null) mobileDebugText.text = $"Adding score {scorePerTreasure} for clue {clueIndex}";
             rtdbFetcher.AddScore(scorePerTreasure);
         }
+        else
+        {
+            Debug.LogWarning($"Score not added: rtdbFetcher={rtdbFetcher != null}, scorePerTreasure={scorePerTreasure}");
+            if (mobileDebugText != null) mobileDebugText.text = $"Score not added: rtdbFetcher={rtdbFetcher != null}, scorePerTreasure={scorePerTreasure}";
+        }
+        
+        // Save progress to Firebase after treasure collection
+        if (progressManager != null)
+        {
+            progressManager.SaveProgressAfterCollection(clueIndex, (teamNumber - 1) % totalClues, totalClues);
+            
+            if (hasPhysicalGame)
+            {
+                // Set physical game as active in progress tracking
+                Debug.Log($"Setting physical game active for clue {clueIndex}");
+                if (mobileDebugText != null) mobileDebugText.text = $"Physical game activated for clue {clueIndex}";
+                progressManager.SetPhysicalGameActive(clueIndex);
+            }
+        }
+        
+        if (!hasPhysicalGame)
+        {
+            // Mark clue as fully completed (no physical game required)
+            MarkClueCompleted(clueIndex);
+        }
+        
+        // Progress tracking now handled by session sync in FirebaseRTDBFetcher
 
         // Show congrats panel
         congratsPanel.SetActive(true);
 
         int remaining = GetRemainingClues();
-        TreasureLocation currentTreasure = GetCurrentTreasureLocation();
+        // Reuse currentTreasure variable declared earlier in the method
 
         // Check if this treasure has a physical game (regardless of whether it's the last one)
         if (currentTreasure != null && currentTreasure.hasPhysicalGame)
@@ -920,17 +1236,56 @@ public class TreasureHuntManager : MonoBehaviour
         isPhysicalGameCompleted = false;
         HidePhysicalGameVerificationUI();
 
-        // Move to next clue only if clues remain
-        clueIndex = (clueIndex + 1) % totalClues;
+        // Calculate next uncompleted clue in sequence for this team
+        int teamStartIndex = (teamNumber - 1) % totalClues;
+        int nextIndex = CalculateNextUncompletedClue(teamStartIndex);
+        
+        if (nextIndex != -1)
+        {
+            clueIndex = nextIndex;
+            Debug.Log($"Moving to next clue: {clueIndex} (team sequence)");
+            if (mobileDebugText != null) mobileDebugText.text = $"Next clue: {clueIndex + 1}";
+            
+            // Update session with new current clue (convert to 1-based)
+            if (rtdbFetcher != null)
+            {
+                rtdbFetcher.UpdateSessionPhase("clue", false);
+            }
+            
+            ShowCluePanel();
+            startHuntButton.gameObject.SetActive(true);
 
-        ShowCluePanel();
-        startHuntButton.gameObject.SetActive(true);
+            // Show inventory button when moving to next treasure
+            if (inventoryButton != null) inventoryButton.gameObject.SetActive(true);
 
-        // Show inventory button when moving to next treasure
-        if (inventoryButton != null) inventoryButton.gameObject.SetActive(true);
-
-        if (collectTreasureButton != null)
-            collectTreasureButton.gameObject.SetActive(false);
+            if (collectTreasureButton != null)
+                collectTreasureButton.gameObject.SetActive(false);
+        }
+        else
+        {
+            // All clues completed - show completion screen
+            Debug.Log("All clues completed!");
+            ShowGameCompletePanel();
+        }
+    }
+    
+    // Calculate the next uncompleted clue in the team's sequence
+    private int CalculateNextUncompletedClue(int teamStartIndex)
+    {
+        // Check all clues in team sequence to find next uncompleted one
+        for (int i = 0; i < totalClues; i++)
+        {
+            int clueToCheck = (teamStartIndex + i) % totalClues;
+            
+            // If this clue is not completed, it's the next one to do
+            if (!completedClueIndices.Contains(clueToCheck))
+            {
+                return clueToCheck;
+            }
+        }
+        
+        // All clues completed
+        return -1;
     }
 
     public void OnInventoryButtonClicked()
@@ -976,6 +1331,15 @@ public class TreasureHuntManager : MonoBehaviour
             // Code is correct - mark physical game as completed
             isPhysicalGameCompleted = true;
             
+            // Mark clue as fully completed (including physical game)
+            MarkClueCompleted(clueIndex);
+            
+            // Clear physical game from progress tracking (no additional scoring - already done during AR collection)
+            if (progressManager != null)
+            {
+                progressManager.ClearPhysicalGameActive();
+            }
+            
             if (physicalGameStatusText != null)
                 physicalGameStatusText.text = "✓ Physical game verified! You can now proceed.";
             
@@ -993,6 +1357,12 @@ public class TreasureHuntManager : MonoBehaviour
                 if (physicalGameText != null)
                     physicalGameText.gameObject.SetActive(false);
                 HidePhysicalGameVerificationUI();
+                
+                // Update session to completed (clear physical game pending)
+                if (rtdbFetcher != null)
+                {
+                    rtdbFetcher.UpdateSessionPhase("completed", false, null, false); // physicalGamePending = false
+                }
             }
             else
             {
@@ -1005,6 +1375,12 @@ public class TreasureHuntManager : MonoBehaviour
                     physicalGameCodeInput.gameObject.SetActive(false);
                 if (verifyPhysicalGameButton != null)
                     verifyPhysicalGameButton.gameObject.SetActive(false);
+                    
+                // Update session to indicate clue is fully completed (clear physical game pending)
+                if (rtdbFetcher != null)
+                {
+                    rtdbFetcher.UpdateSessionPhase("clue", false, null, false); // physicalGamePending = false
+                }
             }
                 
             // Update RTDB with physical game completion if available (no score - handled by web interface)

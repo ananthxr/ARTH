@@ -244,7 +244,7 @@ public class ClueARImageManager : MonoBehaviour
         ClueARData clueData = imageNameToClueData[imageName];
         GameObject arObject = arObjects[imageName];
         
-        // Check if this treasure has already been collected
+        // Check if this treasure has already been collected (enhanced protection)
         if (collectedClueIndices.Contains(clueData.clueIndex))
         {
             if (debugMode)
@@ -252,6 +252,21 @@ public class ClueARImageManager : MonoBehaviour
                 Debug.Log($"Ignoring already collected treasure for clue {clueData.clueIndex} ({imageName})");
                 if (mobileDebugText != null) mobileDebugText.text = $"STEP 4 FAILED: Clue {clueData.clueIndex} already collected";
             }
+            arObject.SetActive(false);
+            return;
+        }
+        
+        // Additional protection: Check session data for completed clues if available
+        if (treasureHuntManager != null && treasureHuntManager.IsClueCompleted(clueData.clueIndex))
+        {
+            if (debugMode)
+            {
+                Debug.Log($"Ignoring treasure for clue {clueData.clueIndex} - marked as completed in session");
+                if (mobileDebugText != null) mobileDebugText.text = $"STEP 4 FAILED: Clue {clueData.clueIndex} completed in session";
+            }
+            
+            // Mark as collected locally to prevent future attempts
+            collectedClueIndices.Add(clueData.clueIndex);
             arObject.SetActive(false);
             return;
         }

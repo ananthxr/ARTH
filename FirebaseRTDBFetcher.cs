@@ -27,6 +27,12 @@ public class SessionData
     public int cluesCompleted;
     public bool physicalGamePlayed;
     public int physicalGameScore;
+    
+    // Enhanced fields for physical game crash recovery
+    public bool physicalGameRequired = false;    // True when current clue needs physical game completion
+    public string currentPhase = "clue";         // "clue", "ar_hunt", "physical_game", "completed"
+    public int[] completedClueIndices;           // Array of fully completed clue indices (0-based)
+    public bool physicalGamePending = false;     // True when AR treasure collected but physical game not completed yet
 }
 
 public class FirebaseRTDBFetcher : MonoBehaviour
@@ -381,44 +387,58 @@ public class FirebaseRTDBFetcher : MonoBehaviour
     // Check session data for existing progress
     private IEnumerator CheckSessionProgress(string uid)
     {
-        string url = BuildUrl(uid + "/session");
-        
-        using (var request = UnityWebRequest.Get(url))
+        // Check progress using ProgressManager instead of session data
+        var progressManager = FindObjectOfType<ProgressManager>();
+        if (progressManager != null)
         {
-            request.timeout = 10;
-            yield return request.SendWebRequest();
+            progressManager.SetActiveUID(uid);
             
-            if (request.result == UnityWebRequest.Result.Success)
+            bool hasProgressData = false;
+            ProgressData progressData = null;
+            
+            // Check if progress exists
+            progressManager.CheckProgressForUID(uid, (hasProgress, data) => {
+                hasProgressData = hasProgress;
+                progressData = data;
+            });
+            
+            // Wait a moment for the callback
+            yield return new WaitForSeconds(1f);
+            
+            if (hasProgressData && progressData != null)
             {
-                string json = request.downloadHandler.text;
+                Debug.Log($"Progress check: {progressData.totalTreasuresCollected} treasures collected, physicalGameActive={progressData.physicalGameActive}, physicalGameClueIndex={progressData.physicalGameClueIndex}");
                 
-                if (!string.IsNullOrWhiteSpace(json) && json != "null")
+                if (progressData.physicalGameActive)
                 {
-                    try
-                    {
-                        var sessionData = JsonUtility.FromJson<SessionData>(json);
-                        
-                        // Check if user has meaningful progress (has completed clues)
-                        if (sessionData != null && sessionData.cluesCompleted > 0)
-                        {
-                            Debug.Log($"Existing session found: {sessionData.cluesCompleted} clues completed, current clue: {sessionData.currentClueNumber}");
-                            
-                            // Resume from session data
-                            ResumeFromSession(sessionData);
-                            yield break;
-                        }
-                    }
-                    catch (System.Exception e)
-                    {
-                        Debug.LogWarning($"Failed to parse session data: {e.Message}");
-                    }
+                    Debug.Log($"Physical game active found: {progressData.totalTreasuresCollected} treasures collected, physical game active for clue: {progressData.physicalGameClueIndex}");
+                    
+                    // Resume to physical game panel
+                    ResumeToPhysicalGame(progressData);
+                    yield break;
+                }
+                else if (progressData.totalTreasuresCollected > 0)
+                {
+                    Debug.Log($"Existing progress found: {progressData.totalTreasuresCollected} treasures collected, next clue: {progressData.nextClueIndex}");
+                    
+                    // Resume from progress data
+                    ResumeFromProgress(progressData);
+                    yield break;
                 }
             }
-            
-            // No meaningful session data - continue with normal flow
-            Debug.Log("No existing session data found - starting new game");
-            ContinueWithNormalFlow();
+            else
+            {
+                Debug.Log("No meaningful progress found - continuing with normal flow");
+            }
         }
+        else
+        {
+            Debug.LogError("ProgressManager not found - cannot check for existing progress");
+        }
+        
+        // No meaningful progress data - continue with normal flow
+        Debug.Log("No existing progress found - starting new game");
+        ContinueWithNormalFlow();
     }
     
     private void ResumeFromSession(SessionData sessionData)
@@ -458,6 +478,90 @@ public class FirebaseRTDBFetcher : MonoBehaviour
         else
         {
             Debug.LogError("Cannot resume game: TreasureHuntManager or team data missing");
+            ContinueWithNormalFlow();
+        }
+    }
+    
+    // Resume to physical game panel when physicalGameActive is true
+    private void ResumeToPhysicalGame(ProgressData progressData)
+    {
+        if (treasureHuntManager != null && _lastFetched != null)
+        {
+            // Disable the "I Verified" button to prevent accidental clicks during resume
+            if (iVerifiedButton != null)
+            {
+                iVerifiedButton.interactable = false;
+            }
+            
+            var team = new TeamData
+            {
+                teamNumber = _lastFetched.teamNumber,
+                uid = _lastFetched.uid,
+                teamName = _lastFetched.teamName,
+                player1 = _lastFetched.player1,
+                player2 = _lastFetched.player2,
+                email = _lastFetched.email,
+                score = _lastFetched.score
+            };
+            
+            // Hide verification panel before resuming game
+            if (verificationPanel != null)
+            {
+                verificationPanel.SetActive(false);
+            }
+            
+            // Resume directly to physical game panel
+            treasureHuntManager.ResumeToPhysicalGame(team, progressData);
+            
+            // Start continuous monitoring once game begins
+            if (enableGameControl)
+                StartVolunteerMonitoring();
+        }
+        else
+        {
+            Debug.LogError("Cannot resume to physical game: TreasureHuntManager or team data missing");
+            ContinueWithNormalFlow();
+        }
+    }
+    
+    // Resume from regular progress (not physical game)
+    private void ResumeFromProgress(ProgressData progressData)
+    {
+        if (treasureHuntManager != null && _lastFetched != null)
+        {
+            // Disable the "I Verified" button to prevent accidental clicks during resume
+            if (iVerifiedButton != null)
+            {
+                iVerifiedButton.interactable = false;
+            }
+            
+            var team = new TeamData
+            {
+                teamNumber = _lastFetched.teamNumber,
+                uid = _lastFetched.uid,
+                teamName = _lastFetched.teamName,
+                player1 = _lastFetched.player1,
+                player2 = _lastFetched.player2,
+                email = _lastFetched.email,
+                score = _lastFetched.score
+            };
+            
+            // Hide verification panel before resuming game
+            if (verificationPanel != null)
+            {
+                verificationPanel.SetActive(false);
+            }
+            
+            // Resume from progress data
+            treasureHuntManager.ResumeFromProgress(team, progressData);
+            
+            // Start continuous monitoring once game begins
+            if (enableGameControl)
+                StartVolunteerMonitoring();
+        }
+        else
+        {
+            Debug.LogError("Cannot resume from progress: TreasureHuntManager or team data missing");
             ContinueWithNormalFlow();
         }
     }
@@ -624,6 +728,44 @@ public class FirebaseRTDBFetcher : MonoBehaviour
         sb.Append("}");
         return wrote ? sb.ToString() : string.Empty;
     }
+    
+    // Enhanced session update with phase and physical game state
+    public void UpdateSessionPhase(string phase, bool physicalGameRequired = false, int[] completedClues = null, bool physicalGamePending = false)
+    {
+        if (string.IsNullOrEmpty(_activeUid)) return;
+        
+        System.Text.StringBuilder sb = new System.Text.StringBuilder();
+        sb.Append("{");
+        bool wrote = false;
+        
+        // Always update phase
+        sb.AppendFormat("\"currentPhase\":\"{0}\"", phase);
+        wrote = true;
+        
+        // Update physical game requirement if specified
+        if (wrote) sb.Append(",");
+        sb.AppendFormat("\"physicalGameRequired\":{0}", physicalGameRequired ? "true" : "false");
+        
+        // Update physical game pending status
+        sb.Append(",");
+        sb.AppendFormat("\"physicalGamePending\":{0}", physicalGamePending ? "true" : "false");
+        
+        // Update completed clues array if provided
+        if (completedClues != null && completedClues.Length > 0)
+        {
+            sb.Append(",\"completedClueIndices\":[");
+            for (int i = 0; i < completedClues.Length; i++)
+            {
+                if (i > 0) sb.Append(",");
+                sb.Append(completedClues[i]);
+            }
+            sb.Append("]");
+        }
+        
+        sb.Append("}");
+        
+        StartCoroutine(WaitForARSessionThenExecute(() => PatchSessionJson(_activeUid, sb.ToString())));
+    }
 
     private IEnumerator PatchSessionField(string uid, string key, bool value)
     {
@@ -706,9 +848,25 @@ public class FirebaseRTDBFetcher : MonoBehaviour
     // Public API to explicitly add points to main score
     public void AddScore(int points)
     {
-        if (!enableScoreSync) return;
-        if (points <= 0) return;
-        if (string.IsNullOrEmpty(_activeUid)) return;
+        Debug.Log($"AddScore called with {points} points. enableScoreSync={enableScoreSync}, activeUid={_activeUid}");
+        
+        if (!enableScoreSync) 
+        {
+            Debug.LogWarning("AddScore failed: enableScoreSync is false");
+            return;
+        }
+        if (points <= 0) 
+        {
+            Debug.LogWarning($"AddScore failed: points <= 0 ({points})");
+            return;
+        }
+        if (string.IsNullOrEmpty(_activeUid)) 
+        {
+            Debug.LogWarning("AddScore failed: activeUid is empty");
+            return;
+        }
+        
+        Debug.Log($"AddScore: Starting score update coroutine for {points} points");
         StartCoroutine(WaitForARSessionThenExecute(() => UpdateScoreBy(_activeUid, points)));
     }
 
