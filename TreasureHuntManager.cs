@@ -60,7 +60,12 @@ public class TreasureHuntManager : MonoBehaviour
     [Header("GPS & AR Components")]
     public ARCameraManager arCameraManager;
     public GameObject arScanPanel;
-    public ClueARImageManager clueARImageManager;
+    public RuntimeClueARImageManager runtimeClueARImageManager;
+    
+    [Header("Web Server Image Manager (Alternative)")]
+    [Tooltip("Use this instead of RuntimeClueARImageManager when testing web server approach")]
+    public WebServerImageManager webServerImageManager;
+    public WebServerClueARImageManager webServerClueARImageManager;
     public ARWorldPositioningManager wpsManager;
 
     [Header("GPS Settings")]
@@ -978,9 +983,14 @@ public class TreasureHuntManager : MonoBehaviour
         if (arScanPanel != null) arScanPanel.SetActive(false);
 
         // Disable AR image tracking when leaving AR mode
-        if (clueARImageManager != null)
+        // Use web server version if available, otherwise use StreamingAssets version
+        if (webServerClueARImageManager != null)
         {
-            clueARImageManager.DisableARTracking();
+            webServerClueARImageManager.DisableARTracking();
+        }
+        else if (runtimeClueARImageManager != null)
+        {
+            runtimeClueARImageManager.DisableARTracking();
         }
 
         // Keep GPS tracking active but don't reset states since hunt is ongoing
@@ -1008,10 +1018,16 @@ public class TreasureHuntManager : MonoBehaviour
         }
 
         // Set the active clue for AR image tracking
-        if (clueARImageManager != null)
+        // Use web server version if available, otherwise use StreamingAssets version
+        if (webServerClueARImageManager != null)
         {
-            clueARImageManager.SetActiveClue(clueIndex);
-            clueARImageManager.EnableARTracking();
+            webServerClueARImageManager.SetActiveClue(clueIndex);
+            webServerClueARImageManager.EnableARTracking();
+        }
+        else if (runtimeClueARImageManager != null)
+        {
+            runtimeClueARImageManager.SetActiveClue(clueIndex);
+            runtimeClueARImageManager.EnableARTracking();
         }
 
         // Hide inventory button when collect treasure button is active
@@ -1097,9 +1113,14 @@ public class TreasureHuntManager : MonoBehaviour
         // Don't reset scale - keep it shrunk to prevent reuse
 
         // Mark treasure as collected in AR manager to prevent respawning
-        if (clueARImageManager != null)
+        // Use web server version if available, otherwise use StreamingAssets version
+        if (webServerClueARImageManager != null)
         {
-            clueARImageManager.MarkTreasureAsCollected(clueIndex);
+            webServerClueARImageManager.MarkTreasureAsCollected(clueIndex);
+        }
+        else if (runtimeClueARImageManager != null)
+        {
+            runtimeClueARImageManager.MarkTreasureAsCollected(clueIndex);
         }
 
         // Add treasure to inventory
